@@ -91,11 +91,12 @@ const TABS = {
   contas: { t: "fin_contas", k: (r) => r.id },
   pag: { t: "fin_pagamentos", k: (r) => r.conta_id + "|" + r.mes, oc: "conta_id,mes" },
   metas: { t: "fin_metas", k: (r) => r.categoria, oc: "espaco_id,categoria" },
+  objetivos: { t: "fin_objetivos", k: (r) => r.id },
 };
 let E = ls.get("juntos:espaco", null);
 let D = null;
-const novoD = () => ({ espaco: null, membros: [], lanc: {}, contas: {}, pag: {}, metas: {}, ts: {} });
-function carregaD() { D = E ? ls.get("juntos:d:" + E, null) || novoD() : null; }
+const novoD = () => ({ espaco: null, membros: [], lanc: {}, contas: {}, pag: {}, metas: {}, objetivos: {}, ts: {} });
+function carregaD() { D = E ? ls.get("juntos:d:" + E, null) || novoD() : null; if (D) { D.objetivos = D.objetivos || {}; D.ts = D.ts || {}; } }
 let salvarT;
 function salvaD() { clearTimeout(salvarT); salvarT = setTimeout(() => { if (E && D) ls.set("juntos:d:" + E, D); }, 150); }
 let fila = ls.get("juntos:fila", []);
@@ -265,7 +266,7 @@ $("#sheet").addEventListener("click", (e) => { if (e.target.id === "sheet") fech
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("#sheet").hidden) fecha(); });
 
 /* ---------- leitura dos dados ---------- */
-const S = { tab: "inicio", mes: mesAtual(), cen: "metas" };
+const S = { tab: "inicio", mes: mesAtual(), cen: "metas", metaTab: "objetivos" };
 const lancs = () => Object.values((D && D.lanc) || {}).filter((r) => !r.deleted && r.data);
 const itensMes = (m) => lancs().filter((r) => r.data.slice(0, 7) === m).map((r) => ({ id: r.id, d: r.data, s: r.descricao, v: +r.valor || 0, t: r.tipo, c: r.categoria, q: r.quem, k: r.conta, nf: r.nota_path, pend: !!r._nfce, ts: r.updated_at || "" }));
 const gastos = (its) => its.filter((i) => i.t !== "e");
@@ -500,9 +501,32 @@ function vContas() {
   $("#view").innerHTML = h + '<button class="btn secondary" data-novaconta="1">Adicionar conta</button>';
 }
 
+function mesesAte(prazo) { if (!prazo) return null; const [y1, m1] = mesAtual().split("-").map(Number), [y2, m2] = prazo.split("-").map(Number); return (y2 - y1) * 12 + (m2 - m1) + 1; }
 function vMetas() {
+  const seg = '<div class="seg" role="group" aria-label="Tipo de meta"><button data-mtab="objetivos" aria-pressed="' + (S.metaTab === "objetivos") + '">Objetivos</button><button data-mtab="limites" aria-pressed="' + (S.metaTab === "limites") + '">Limites de gasto</button></div>';
+  if (S.metaTab === "objetivos") return vObjetivos(seg);
+  vLimites(seg);
+}
+function vObjetivos(seg) {
+  const obs = Object.values(D.objetivos || {}).filter((o) => !o.deleted).sort((a, b) => (a.ordem || 50) - (b.ordem || 50) || String(a.nome).localeCompare(b.nome));
+  const tot = obs.reduce((a, o) => a + (+o.alvo || 0), 0), gu = obs.reduce((a, o) => a + Math.min(+o.guardado || 0, +o.alvo || 0), 0);
+  let h = seg;
+  if (!obs.length) { $("#view").innerHTML = h + '<div class="card empty"><b>Qual é o próximo sonho?</b>Crie um objetivo com o valor que vocês querem juntar, como reserva de emergência, viagem ou carro. O app mostra quanto guardar por mês.</div><button class="btn" data-novoobj="1">Criar objetivo</button>'; return; }
+  h += '<section class="card" style="display:flex;flex-direction:column;gap:8px"><span class="label">Guardado nos objetivos</span><div class="row"><span class="num" style="font-family:var(--f-display);font-size:32px;font-weight:700;letter-spacing:-.8px">' + esc(brl0.format(gu)) + '</span><span class="small muted num">de ' + esc(brl0.format(tot)) + '</span></div><div class="track"><div class="fill" style="width:' + (tot ? (gu / tot) * 100 : 0) + '%"></div></div></section>';
+  obs.forEach((o) => {
+    const alvo = +o.alvo || 0, g = +o.guardado || 0, falta = Math.max(0, alvo - g), r = alvo ? Math.min(1, g / alvo) : 0, ms = mesesAte(o.prazo);
+    let linha;
+    if (falta <= 0) linha = '<span class="xs" style="color:var(--ok);font-weight:800">Objetivo alcançado</span>';
+    else if (ms == null) linha = '<span class="xs muted">Faltam ' + esc(brl0.format(falta)) + ". Sem prazo definido.</span>";
+    else if (ms < 1) linha = '<span class="xs" style="color:var(--warn);font-weight:800">O prazo passou. Faltam ' + esc(brl0.format(falta)) + ".</span>";
+    else linha = '<span class="xs muted">Guardar <b style="color:var(--ink)">' + esc(brl0.format(falta / ms)) + "</b> por mês até " + esc(curto(o.prazo)) + "/" + esc(o.prazo.slice(2, 4)) + " · faltam " + esc(brl0.format(falta)) + "</span>";
+    h += '<button class="card metaRow" data-obj="' + esc(o.id) + '" style="border-radius:22px;padding:16px;gap:8px"><div class="row"><h2>' + esc(o.nome) + '</h2><span class="small num" style="font-weight:800;color:var(--primary-text)">' + Math.round(r * 100) + '%</span></div><div class="row"><span class="num" style="font-family:var(--f-display);font-size:24px;font-weight:700">' + esc(brl0.format(g)) + '</span><span class="small muted num">de ' + esc(brl0.format(alvo)) + '</span></div><div class="track"><div class="fill" style="width:' + r * 100 + '%"></div></div>' + linha + "</button>";
+  });
+  $("#view").innerHTML = h + '<button class="btn secondary" data-novoobj="1">Criar objetivo</button>';
+}
+function vLimites(seg) {
   const its = itensMes(S.mes), cat = porCat(its), T = teto(), g = somaVar(its), mt = metas();
-  let h = '<section class="card" style="display:flex;flex-direction:column;gap:8px"><div class="row"><span class="label">Dia a dia em ' + esc(nomeM(S.mes)) + '</span><span class="pill" style="background:' + (g > T ? "var(--warn-bg)" : "var(--primary-soft)") + ";color:" + (g > T ? "var(--warn-ink)" : "var(--primary-text)") + '">' + (g > T ? "passou " + esc(brl0.format(g - T)) : "dentro do limite") + '</span></div><div class="row"><span class="num" style="font-family:var(--f-display);font-size:32px;font-weight:700;letter-spacing:-.8px">' + esc(brl0.format(g)) + '</span><span class="small muted num">de ' + esc(brl0.format(T)) + '</span></div><span class="xs muted">Toque numa categoria para mudar a meta. Contas fixas ficam na aba Contas.</span></section><section class="card"><div class="list">';
+  let h = seg + '<section class="card" style="display:flex;flex-direction:column;gap:8px"><div class="row"><span class="label">Dia a dia em ' + esc(nomeM(S.mes)) + '</span><span class="pill" style="background:' + (g > T ? "var(--warn-bg)" : "var(--primary-soft)") + ";color:" + (g > T ? "var(--warn-ink)" : "var(--primary-text)") + '">' + (g > T ? "passou " + esc(brl0.format(g - T)) : "dentro do limite") + '</span></div><div class="row"><span class="num" style="font-family:var(--f-display);font-size:32px;font-weight:700;letter-spacing:-.8px">' + esc(brl0.format(g)) + '</span><span class="small muted num">de ' + esc(brl0.format(T)) + '</span></div><span class="xs muted">Quanto vocês se permitem gastar por categoria no mês. Toque numa categoria para mudar o limite.</span></section><section class="card"><div class="list">';
   CATS.slice().sort((a, b) => (cat[b] || 0) / (mt[b] || 1) - (cat[a] || 0) / (mt[a] || 1)).forEach((c) => {
     const v = cat[c] || 0, m = mt[c] || 0, r = m ? v / m : 0, cor = r > 1 ? "var(--warn)" : r > 0.85 ? "var(--amber)" : "var(--ok)";
     h += '<button class="metaRow" data-meta="' + esc(c) + '"><div class="row"><b>' + esc(c) + '</b><span class="small num"><b>' + esc(brl0.format(v)) + '</b> <span class="muted">/ ' + esc(brl0.format(m)) + '</span></span></div><div class="track"><div class="fill" style="width:' + Math.min(100, r * 100) + "%;background:" + cor + '"></div></div>' + (r > 1 ? '<span class="xs" style="color:var(--warn);font-weight:800">passou ' + esc(brl0.format(v - m)) + "</span>" : "") + "</button>";
@@ -524,13 +548,16 @@ function vProjecao() {
 
 /* ---------- ações ---------- */
 document.addEventListener("click", (e) => {
-  const t = e.target.closest("[data-tab],[data-go],[data-cen],[data-pagar],[data-conta],[data-meta],[data-item],[data-novaconta]");
+  const t = e.target.closest("[data-tab],[data-go],[data-cen],[data-pagar],[data-conta],[data-meta],[data-item],[data-novaconta],[data-mtab],[data-obj],[data-novoobj]");
   if (!t || t.closest("#panel")) return;
   if (t.dataset.tab || t.dataset.go) { S.tab = t.dataset.tab || t.dataset.go; render(); window.scrollTo(0, 0); return; }
   if (t.dataset.cen) { S.cen = t.dataset.cen; render(); return; }
   if (t.dataset.pagar) { const id = t.dataset.pagar, on = !pago(id, S.mes); grava("pag", { conta_id: id, mes: S.mes, pago: on }); render(); toast(on ? "Conta marcada como paga" : "Conta desmarcada"); return; }
   if (t.dataset.conta) return editaConta(t.dataset.conta);
   if (t.dataset.meta) return editaMeta(t.dataset.meta);
+  if (t.dataset.mtab) { S.metaTab = t.dataset.mtab; render(); return; }
+  if (t.dataset.obj) return objetivo(t.dataset.obj);
+  if (t.dataset.novoobj) return objetivo(null);
   if (t.dataset.item) return detalheItem(t.dataset.item);
   if (t.dataset.novaconta) return novaConta();
 });
@@ -646,8 +673,42 @@ function detalheItem(id) {
 }
 
 function editaMeta(c) {
-  abre("<h2>Meta de " + esc(c) + '</h2><label class="field">Limite por mês<input id="mV" inputmode="decimal" value="' + esc(String(metas()[c] || 0).replace(".", ",")) + '"></label><button class="btn" id="mS">Salvar meta</button>', (p) => {
-    $("#mS", p).onclick = () => { const v = parseNum($("#mV", p).value); if (!(v >= 0)) { toast("Digite um valor"); return; } grava("metas", { categoria: c, valor: v }); fecha(); render(); toast("Meta salva"); };
+  abre("<h2>Limite de " + esc(c) + '</h2><label class="field">Limite por mês<input id="mV" inputmode="decimal" value="' + esc(String(metas()[c] || 0).replace(".", ",")) + '"></label><button class="btn" id="mS">Salvar meta</button>', (p) => {
+    $("#mS", p).onclick = () => { const v = parseNum($("#mV", p).value); if (!(v >= 0)) { toast("Digite um valor"); return; } grava("metas", { categoria: c, valor: v }); fecha(); render(); toast("Limite salvo"); };
+  });
+}
+
+function objetivo(id) {
+  const o = id ? D.objetivos[id] : null;
+  const campo = (lbl, idc, val, extra) => '<label class="field">' + lbl + '<input id="' + idc + '" ' + (extra || 'inputmode="decimal"') + ' value="' + esc(val == null ? "" : val) + '"></label>';
+  const vstr = (n) => (n == null || n === "" ? "" : String(n).replace(".", ","));
+  let html = "<h2>" + (o ? esc(o.nome) : "Novo objetivo") + "</h2>";
+  if (o) html += '<div class="card" style="display:flex;flex-direction:column;gap:10px"><span class="label">Movimentar</span>' + campo("Valor", "oMov", "", 'inputmode="decimal" placeholder="R$ 0,00"') + '<div class="row-actions"><button class="btn" id="oAdd">Guardei</button><button class="btn secondary" id="oTir">Retirei</button></div></div>';
+  html += '<div class="card" style="display:flex;flex-direction:column;gap:10px"><span class="label">' + (o ? "Editar objetivo" : "Qual é o objetivo") + "</span>" +
+    campo("Nome", "oNome", o ? o.nome : "", 'maxlength="60" placeholder="Ex.: Reserva de emergência"') +
+    campo("Quanto quer juntar", "oAlvo", o ? vstr(o.alvo) : "", 'inputmode="decimal" placeholder="R$ 0,00"') +
+    campo("Até quando (opcional)", "oPrazo", o ? o.prazo || "" : "", 'type="month" min="' + mesAtual() + '"') +
+    (o ? "" : campo("Já tem guardado (opcional)", "oJa", "", 'inputmode="decimal" placeholder="R$ 0,00"')) +
+    '<p class="err" id="oErr" role="alert"></p><button class="btn' + (o ? " secondary" : "") + '" id="oSalvar">' + (o ? "Salvar alterações" : "Criar objetivo") + "</button></div>" +
+    (o ? '<button class="btn danger" id="oDel">Apagar objetivo</button>' : "") + '<button class="btn secondary" id="oF">Fechar</button>';
+  abre(html, (p) => {
+    $("#oF", p).onclick = fecha;
+    const salva = (row, msg) => { grava("objetivos", row); fecha(); render(); toast(msg); };
+    if (o) {
+      const mov = (sinal) => { const v = parseNum($("#oMov", p).value); if (!(v > 0)) { toast("Digite o valor"); $("#oMov", p).focus(); return; } const g = Math.max(0, Math.round(((+o.guardado || 0) + sinal * v) * 100) / 100); salva(Object.assign(soCampos(o), { guardado: g }), sinal > 0 ? "Guardado " + brl.format(v) : "Retirado " + brl.format(v)); };
+      $("#oAdd", p).onclick = () => mov(1);
+      $("#oTir", p).onclick = () => mov(-1);
+      let arm = false; $("#oDel", p).onclick = (e) => { if (!arm) { arm = true; e.target.textContent = "Toque de novo para apagar"; return; } salva(Object.assign(soCampos(o), { deleted: true }), "Objetivo apagado"); };
+    }
+    $("#oSalvar", p).onclick = () => {
+      const nome = $("#oNome", p).value.trim().slice(0, 60), alvo = parseNum($("#oAlvo", p).value), prazo = $("#oPrazo", p).value || null, err = $("#oErr", p);
+      if (!nome) { err.textContent = "Dê um nome ao objetivo."; return; }
+      if (!(alvo > 0)) { err.textContent = "Digite quanto quer juntar."; return; }
+      if (prazo && !/^\d{4}-\d{2}$/.test(prazo)) { err.textContent = "Escolha o mês do prazo."; return; }
+      if (o) return salva(Object.assign(soCampos(o), { nome, alvo, prazo }), "Objetivo salvo");
+      const ja = parseNum($("#oJa", p).value);
+      salva({ id: uuid(), nome, alvo, prazo, guardado: ja > 0 ? ja : 0, ordem: 50, deleted: false }, "Objetivo criado");
+    };
   });
 }
 
@@ -684,9 +745,30 @@ function novaConta() {
   });
 }
 
+function pessoa(uid) {
+  const m = (D.membros || []).find((x) => x.user_id === uid); if (!m) return;
+  const eu = uid === api.uid();
+  abre("<h2>" + esc(m.nome || "Membro") + (eu ? " (você)" : "") + '</h2><p class="small muted" style="margin:0">Administrador(a) muda papéis e remove pessoas. Convidado(a) vê e lança tudo.</p><div class="seg" role="group" aria-label="Papel"><button data-papel="admin" aria-pressed="' + (m.papel === "admin") + '">Administrador(a)</button><button data-papel="membro" aria-pressed="' + (m.papel !== "admin") + '">Convidado(a)</button></div><p class="err" id="rErr" role="alert"></p>' + (eu ? "" : '<button class="btn danger" id="rRem">Remover do espaço</button>') + '<button class="btn secondary" id="rF">Fechar</button>', (p) => {
+    $("#rF", p).onclick = fecha;
+    p.querySelectorAll("[data-papel]").forEach((b) => (b.onclick = async () => {
+      const papel = b.dataset.papel; if (papel === m.papel) return;
+      if (!navigator.onLine) { $("#rErr", p).textContent = "Para mudar papéis, conecte-se à internet."; return; }
+      try { await api.req("/rest/v1/rpc/fin_mudar_papel", { method: "POST", body: { p_espaco: E, p_user: uid, p_papel: papel } }); m.papel = papel; salvaD(); fecha(); toast(papel === "admin" ? "Agora é administrador(a)" : "Agora é convidado(a)"); sync(); }
+      catch (e) { $("#rErr", p).textContent = e.message; }
+    }));
+    const rem = $("#rRem", p); if (rem) { let arm = false; rem.onclick = async (e) => {
+      if (!arm) { arm = true; e.target.textContent = "Toque de novo para remover"; return; }
+      if (!navigator.onLine) { $("#rErr", p).textContent = "Para remover, conecte-se à internet."; return; }
+      try { await api.req("/rest/v1/fin_membros?espaco_id=eq." + E + "&user_id=eq." + uid, { method: "DELETE", headers: { Prefer: "return=minimal" } }); D.membros = D.membros.filter((x) => x.user_id !== uid); salvaD(); fecha(); toast("Removido do espaço"); }
+      catch (e2) { $("#rErr", p).textContent = e2.message; }
+    }; }
+  });
+}
+
 async function perfil() {
   const espacos = ls.get("juntos:espacos", []);
-  const membros = (D.membros || []).map((m) => '<div class="item" style="cursor:default"><span class="ico">' + esc((m.nome || "?")[0].toUpperCase()) + '</span><span class="main"><b>' + esc(m.nome || "Membro") + (m.user_id === api.uid() ? " (você)" : "") + '</b><span class="xs muted">' + (m.papel === "admin" ? "administra" : "membro") + "</span></span></div>").join("");
+  const admin = souAdmin();
+  const membros = (D.membros || []).map((m) => '<div class="item" style="cursor:default"><span class="ico">' + esc((m.nome || "?")[0].toUpperCase()) + '</span><span class="main"><b>' + esc(m.nome || "Membro") + (m.user_id === api.uid() ? " (você)" : "") + '</b><span class="xs muted">' + (m.papel === "admin" ? "Administrador(a)" : "Convidado(a)") + "</span></span>" + (admin ? '<button class="linkbtn" data-pessoa="' + esc(m.user_id) + '">Alterar</button>' : "") + "</div>").join("");
   abre('<h2>' + esc((D.espaco && D.espaco.nome) || "Espaço") + '</h2>' +
     '<div class="card" style="display:flex;flex-direction:column;gap:10px"><span class="label">Renda mensal da família</span><input id="pR" class="num" inputmode="decimal" style="height:48px;border-radius:14px;border:1.5px solid var(--line);background:var(--surface);padding:0 14px;font-size:16px;font-weight:700;color:var(--ink)" value="' + esc(String(renda()).replace(".", ",")) + '" aria-label="Renda mensal"><button class="btn" id="pS">Salvar renda</button></div>' +
     '<div class="card"><div class="row"><span class="label">Pessoas</span><button class="linkbtn" id="pConv">Convidar</button></div><div class="list" style="margin-top:4px">' + (membros || '<p class="small muted">Só você por enquanto.</p>') + '</div><div id="pCodeBox"></div></div>' +
@@ -695,6 +777,7 @@ async function perfil() {
     (espacos.length > 1 ? '<div class="card" style="display:flex;flex-direction:column;gap:10px"><span class="label">Trocar de espaço</span>' + espacos.map((x) => '<button class="btn secondary" data-esp="' + esc(x.id) + '"' + (x.id === E ? " disabled" : "") + ">" + esc(x.nome) + "</button>").join("") + "</div>" : "") +
     '<button class="btn secondary" id="pOutro">Entrar em outro espaço com código</button><button class="btn danger" id="pSair">Sair da conta</button><button class="btn secondary" id="pF">Fechar</button>', (p) => {
     $("#pF", p).onclick = fecha;
+    p.querySelectorAll("[data-pessoa]").forEach((b) => (b.onclick = () => { fecha(); pessoa(b.dataset.pessoa); }));
     $("#pS", p).onclick = () => { const v = parseNum($("#pR", p).value); if (!(v >= 0)) { toast("Digite a renda"); return; } D.espaco.renda = v; salvaD(); fila = fila.filter((f) => !(f.tab === "espaco" && f.e === E)); fila.push({ tab: "espaco", k: E, e: E, row: { renda: v } }); salvaFila(); agendaSync(); fecha(); render(); toast("Renda salva"); };
     p.querySelectorAll("[data-tema]").forEach((b) => (b.onclick = () => { tema = b.dataset.tema; ls.set("juntos:tema", tema); aplicaTema(); p.querySelectorAll("[data-tema]").forEach((x) => x.setAttribute("aria-pressed", x === b)); render(); }));
     $("#pSync", p).onclick = async () => { fecha(); await sync(); toast(SY.erro ? "Não sincronizou agora" : "Sincronizado"); };
