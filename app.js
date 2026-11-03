@@ -143,7 +143,7 @@ async function sync() {
     // 3. notas com QR Code esperando leitura
     for (const r of Object.values(D.lanc)) if (r._nfce && r.nfce_url && !r.deleted) await leNfcePendente(r);
     // 4. recebe as mudanças dos outros
-    const esp = await api.req("/rest/v1/fin_espacos?id=eq." + E + "&select=id,nome,renda");
+    const esp = await api.req("/rest/v1/fin_espacos?id=eq." + E + "&select=id,nome,renda,proj_alvo,proj_prazo,proj_inicial");
     if (esp && esp[0]) D.espaco = esp[0];
     else { // perdeu acesso a este espaço
       SY.rodando = false; sairDoEspaco(); return;
@@ -535,23 +535,108 @@ function vLimites(seg) {
 }
 
 const abrev = (v) => { const a = Math.abs(v), s = v < 0 ? "−" : ""; return s + (a >= 1000 ? (a / 1000).toFixed(1).replace(".", ",") + "k" : Math.round(a)); };
+function patchEspaco(obj) {
+  D.espaco = Object.assign({}, D.espaco, obj); salvaD();
+  const ant = fila.find((f) => f.tab === "espaco" && f.e === E);
+  fila = fila.filter((f) => f !== ant);
+  fila.push({ tab: "espaco", k: E, e: E, row: Object.assign({}, ant ? ant.row : {}, obj) });
+  salvaFila(); agendaSync();
+}
+const HORIZ = [[6, "6 meses"], [12, "1 ano"], [18, "1 ano e meio"], [24, "2 anos"], [36, "3 anos"], [60, "5 anos"]];
+const mesAno = (m) => curto(m) + "/" + m.slice(2, 4);
+function serie(n, cen) {
+  const R = renda(), varM = cen === "metas" ? teto() : ritmo(), ini = +(D.espaco.proj_inicial || 0);
+  let acc = ini; const out = [];
+  for (let k = 0; k < n; k++) { const m = addM(mesAtual(), k), mes = R - totalContas(m) - varM; acc += mes; out.push({ m, mes, acc }); }
+  return out;
+}
+function graficoSVG(vals, alvo, prazo) {
+  const W = 340, H = 170, pl = 6, pr = 6, pt = 14, pb = 22;
+  const ys = vals.map((v) => v.acc).concat([0]); if (alvo) ys.push(alvo);
+  const maxY = Math.max(...ys), minY = Math.min(...ys), span = maxY - minY || 1;
+  const x = (i) => pl + (vals.length === 1 ? 0 : (i / (vals.length - 1)) * (W - pl - pr));
+  const y = (v) => pt + (1 - (v - minY) / span) * (H - pt - pb);
+  const pts = vals.map((v, i) => x(i).toFixed(1) + "," + y(v.acc).toFixed(1)).join(" ");
+  const area = "M" + x(0).toFixed(1) + "," + y(Math.max(0, minY)).toFixed(1) + " L" + pts.replace(/ /g, " L") + " L" + x(vals.length - 1).toFixed(1) + "," + y(Math.max(0, minY)).toFixed(1) + " Z";
+  const meio = Math.floor((vals.length - 1) / 2);
+  let g = '<svg viewBox="0 0 ' + W + " " + H + '" width="100%" role="img" aria-label="Saldo guardado mês a mês" style="display:block;overflow:visible">';
+  g += '<line x1="' + pl + '" x2="' + (W - pr) + '" y1="' + y(0).toFixed(1) + '" y2="' + y(0).toFixed(1) + '" stroke="var(--line)" stroke-width="1.5"/>';
+  g += '<path d="' + area + '" fill="var(--primary-soft)" opacity=".9"/><polyline points="' + pts + '" fill="none" stroke="var(--primary-text)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"/>';
+  if (alvo) {
+    g += '<line x1="' + pl + '" x2="' + (W - pr) + '" y1="' + y(alvo).toFixed(1) + '" y2="' + y(alvo).toFixed(1) + '" stroke="var(--amber)" stroke-width="1.5" stroke-dasharray="5 4"/><text x="' + (W - pr) + '" y="' + (y(alvo) - 5).toFixed(1) + '" text-anchor="end" font-size="11" font-weight="800" fill="var(--amber)">meta R$ ' + esc(new Intl.NumberFormat("pt-BR", { notation: "compact", maximumFractionDigits: 1 }).format(alvo)) + "</text>";
+    const ip = vals.findIndex((v) => v.m === prazo);
+    if (ip >= 0) g += '<circle cx="' + x(ip).toFixed(1) + '" cy="' + y(alvo).toFixed(1) + '" r="4.5" fill="var(--amber)"/>';
+  }
+  const ult = vals[vals.length - 1];
+  g += '<circle cx="' + x(vals.length - 1).toFixed(1) + '" cy="' + y(ult.acc).toFixed(1) + '" r="4.5" fill="var(--primary-text)"/>';
+  [[0, "start"], [meio, "middle"], [vals.length - 1, "end"]].forEach(([i, an]) => { g += '<text x="' + x(i).toFixed(1) + '" y="' + (H - 4) + '" text-anchor="' + an + '" font-size="11" font-weight="700" fill="var(--muted)">' + esc(mesAno(vals[i].m)) + "</text>"; });
+  return g + "</svg>";
+}
 function vProjecao() {
-  const R = renda(), T = teto(), rit = ritmo(), meses = [0, 1, 2, 3, 4, 5].map((k) => addM(mesAtual(), k));
-  let acc = 0; const vals = meses.map((m) => { const mes = R - totalContas(m) - (S.cen === "metas" ? T : rit); acc += mes; return { m, acc, mes }; });
-  const mx = Math.max(1, ...vals.map((v) => Math.abs(v.acc))), fim = vals[5].acc;
-  let h = '<div class="seg" role="group" aria-label="Cenário"><button data-cen="metas" aria-pressed="' + (S.cen === "metas") + '">Com as metas</button><button data-cen="ritmo" aria-pressed="' + (S.cen === "ritmo") + '">No ritmo atual</button></div>';
-  h += '<section class="card" style="display:flex;flex-direction:column;gap:14px"><div><div class="xs muted" style="font-weight:700">Guardado até ' + esc(nomeM(meses[5])) + '</div><div class="num" style="font-family:var(--f-display);font-size:clamp(36px,10vw,44px);font-weight:700;letter-spacing:-1.2px;color:' + (fim >= 0 ? "var(--primary-text)" : "var(--warn)") + '">' + esc(brl0.format(fim)) + '</div><div class="small muted">dia a dia em ' + esc(brl0.format(S.cen === "metas" ? T : rit)) + " por mês" + (S.cen === "metas" ? "" : ", média dos últimos meses") + "</div></div>";
-  h += '<div class="bars" role="img" aria-label="Saldo acumulado por mês">' + vals.map((v) => '<div class="b"><span class="num">' + esc(abrev(v.acc)) + '</span><i class="' + (v.acc < 0 ? "neg" : "") + '" style="height:' + Math.max(4, (Math.abs(v.acc) / mx) * 110) + 'px"></i></div>').join("") + '</div><div class="axis">' + vals.map((v) => "<span>" + esc(curto(v.m)) + "</span>").join("") + "</div></section>";
-  h += '<section class="card"><h2 style="padding-bottom:6px">Mês a mês</h2><div class="list">' + vals.map((v) => '<div class="item" style="cursor:default"><span class="main"><b style="text-transform:capitalize">' + esc(nomeM(v.m)) + '</b><span class="xs muted num">contas ' + esc(brl0.format(totalContas(v.m))) + '</span></span><span class="amt num" style="color:' + (v.mes >= 0 ? "var(--ok)" : "var(--warn)") + '">' + (v.mes >= 0 ? "+" : "−") + esc(brl0.format(Math.abs(v.mes))) + "</span></div>").join("") + '</div><p class="xs muted" style="margin:8px 0 0">Compras no crédito contam no mês em que acontecem. As faturas listadas em Contas são só o que já existia antes.</p></section>';
+  const hor = S.hor || ls.get("juntos:horizonte", 12); S.hor = hor;
+  const T = teto(), rit = ritmo(), dia = S.cen === "metas" ? T : rit, ini = +(D.espaco.proj_inicial || 0);
+  const alvo = +D.espaco.proj_alvo || 0, prazo = D.espaco.proj_prazo || null;
+  const nMeta = prazo ? mesesAte(prazo) : 0;
+  const vals = serie(hor, S.cen), fim = vals[vals.length - 1];
+  let h = '<div class="seg" role="group" aria-label="Cenário"><button data-cen="metas" aria-pressed="' + (S.cen === "metas") + '">Com os limites</button><button data-cen="ritmo" aria-pressed="' + (S.cen === "ritmo") + '">No ritmo atual</button></div>';
+  h += '<div class="chips" role="group" aria-label="Período da projeção">' + HORIZ.map(([n, l]) => '<button class="chip" data-hor="' + n + '" aria-pressed="' + (hor === n) + '">' + l + "</button>").join("") + "</div>";
+  h += '<section class="card" style="display:flex;flex-direction:column;gap:12px"><div><div class="xs muted" style="font-weight:700">Guardado em ' + esc(mesAno(fim.m)) + '</div><div class="num" style="font-family:var(--f-display);font-size:clamp(36px,10vw,44px);font-weight:700;letter-spacing:-1.2px;color:' + (fim.acc >= 0 ? "var(--primary-text)" : "var(--warn)") + '">' + esc(brl0.format(fim.acc)) + '</div><div class="small muted">' + (ini ? "começando com " + esc(brl0.format(ini)) + " · " : "") + "dia a dia em " + esc(brl0.format(dia)) + " por mês" + (S.cen === "metas" ? "" : ", média dos últimos meses") + "</div></div>" + graficoSVG(vals, alvo, prazo) + "</section>";
+  // meta da projeção
+  if (!alvo || !prazo) {
+    h += '<section class="card" style="display:flex;flex-direction:column;gap:10px"><h2>Quanto vocês querem ter guardado?</h2><p class="small muted" style="margin:0">Ex.: R$ 100 mil em 1 ano. O app mostra se dá para chegar e quanto precisa guardar por mês.</p><button class="btn" data-projmeta="1">Definir meta</button></section>';
+  } else {
+    const n = mesesAte(prazo);
+    let corpo;
+    if (n < 1) corpo = '<p class="small" style="margin:0;color:var(--warn);font-weight:700">O prazo desta meta já passou. Toque em Alterar para escolher outro.</p>';
+    else {
+      const sMeta = serie(n, S.cen), P = sMeta[n - 1].acc, porMes = (P - ini) / n;
+      if (P >= alvo) corpo = '<p style="margin:0;font-weight:700;color:var(--ok)">Dá para chegar.</p><p class="small" style="margin:0">' + (S.cen === "metas" ? "Dentro dos limites de gasto" : "No ritmo atual") + ", vocês teriam <b>" + esc(brl0.format(P)) + "</b> em " + esc(mesAno(prazo)) + ", " + esc(brl0.format(P - alvo)) + " acima da meta.</p>";
+      else {
+        const falta = alvo - P, extra = falta / n;
+        let quando = null; if (porMes > 0) { const longa = serie(240, S.cen); const i = longa.findIndex((v) => v.acc >= alvo); if (i >= 0) quando = longa[i].m; }
+        corpo = '<p style="margin:0;font-weight:700;color:var(--warn)">Faltam ' + esc(brl0.format(falta)) + "</p>" +
+          '<p class="small" style="margin:0">Hoje vocês guardariam <b>' + esc(brl0.format(Math.max(0, porMes))) + "</b> por mês e chegariam a " + esc(brl0.format(P)) + " em " + esc(mesAno(prazo)) + ". Para bater a meta, precisam guardar <b>" + esc(brl0.format(porMes + extra)) + "</b> por mês, ou seja, <b>" + esc(brl0.format(extra)) + " a mais</b>.</p>" +
+          (extra <= dia ? '<p class="small" style="margin:0">Isso é baixar o dia a dia de ' + esc(brl0.format(dia)) + " para " + esc(brl0.format(dia - extra)) + " por mês, ou aumentar a renda nesse valor.</p>" : '<p class="small" style="margin:0">Mesmo zerando o dia a dia, não fecha. Só com mais renda, menos contas fixas ou um prazo maior.</p>') +
+          (quando ? '<p class="small muted" style="margin:0">Mantendo o ritmo, vocês chegam lá em ' + esc(mesAno(quando)) + ".</p>" : "");
+      }
+    }
+    h += '<section class="card" style="display:flex;flex-direction:column;gap:8px"><div class="row"><span class="label">Meta da projeção</span><button class="linkbtn" data-projmeta="1">Alterar</button></div><div class="num" style="font-family:var(--f-display);font-size:26px;font-weight:700">' + esc(brl0.format(alvo)) + ' <span class="small muted" style="font-family:var(--f-body)">até ' + esc(mesAno(prazo)) + "</span></div>" + corpo + "</section>";
+  }
+  // detalhe
+  let lista;
+  if (hor <= 12) lista = vals.map((v) => '<div class="item" style="cursor:default"><span class="main"><b style="text-transform:capitalize">' + esc(nomeM(v.m)) + " " + v.m.slice(0, 4) + '</b><span class="xs muted num">contas ' + esc(brl0.format(totalContas(v.m))) + " · guardado " + esc(brl0.format(v.acc)) + '</span></span><span class="amt num" style="color:' + (v.mes >= 0 ? "var(--ok)" : "var(--warn)") + '">' + (v.mes >= 0 ? "+" : "−") + esc(brl0.format(Math.abs(v.mes))) + "</span></div>").join("");
+  else { const anos = {}; vals.forEach((v) => { const a = v.m.slice(0, 4); anos[a] = anos[a] || { soma: 0, fim: 0, n: 0 }; anos[a].soma += v.mes; anos[a].fim = v.acc; anos[a].n++; }); lista = Object.keys(anos).map((a) => '<div class="item" style="cursor:default"><span class="main"><b>' + a + '</b><span class="xs muted num">' + anos[a].n + " meses · guardado no fim: " + esc(brl0.format(anos[a].fim)) + '</span></span><span class="amt num" style="color:' + (anos[a].soma >= 0 ? "var(--ok)" : "var(--warn)") + '">' + (anos[a].soma >= 0 ? "+" : "−") + esc(brl0.format(Math.abs(anos[a].soma))) + "</span></div>").join(""); }
+  h += '<section class="card"><h2 style="padding-bottom:6px">' + (hor <= 12 ? "Mês a mês" : "Ano a ano") + '</h2><div class="list">' + lista + '</div><p class="xs muted" style="margin:8px 0 0">Projeção feita com a renda, as contas cadastradas e o dia a dia. Compras no crédito contam no mês em que acontecem.</p></section>';
   $("#view").innerHTML = h;
+}
+
+function projMeta() {
+  const e = D.espaco, alvo = +e.proj_alvo || "", prazo = e.proj_prazo || "", ini = +e.proj_inicial || 0;
+  const op = HORIZ.map(([n, l]) => '<button class="chip" data-pz="' + addM(mesAtual(), n - 1) + '" aria-pressed="' + (prazo === addM(mesAtual(), n - 1)) + '">' + l + "</button>").join("");
+  abre('<h2>Meta da projeção</h2><label class="field">Quanto querem ter guardado<input id="pmV" inputmode="decimal" placeholder="Ex.: 100.000" value="' + esc(alvo ? String(alvo).replace(".", ",") : "") + '"></label><div class="field">Em quanto tempo<div class="chips" role="group" aria-label="Prazo">' + op + '</div></div><label class="field">Ou escolha o mês<input id="pmP" type="month" min="' + mesAtual() + '" value="' + esc(prazo) + '"></label><label class="field">Quanto já têm guardado hoje<input id="pmI" inputmode="decimal" placeholder="R$ 0" value="' + esc(ini ? String(ini).replace(".", ",") : "") + '"></label><p class="err" id="pmE" role="alert"></p><button class="btn" id="pmS">Salvar meta</button>' + (e.proj_alvo ? '<button class="btn danger" id="pmD">Remover meta</button>' : "") + '<button class="btn secondary" id="pmF">Fechar</button>', (p) => {
+    $("#pmF", p).onclick = fecha;
+    p.querySelectorAll("[data-pz]").forEach((b) => (b.onclick = () => { $("#pmP", p).value = b.dataset.pz; p.querySelectorAll("[data-pz]").forEach((x) => x.setAttribute("aria-pressed", x === b)); }));
+    $("#pmP", p).addEventListener("change", () => p.querySelectorAll("[data-pz]").forEach((x) => x.setAttribute("aria-pressed", x.dataset.pz === $("#pmP", p).value)));
+    $("#pmS", p).onclick = () => {
+      const v = parseNum($("#pmV", p).value), pz = $("#pmP", p).value, i = parseNum($("#pmI", p).value);
+      if (!(v > 0)) { $("#pmE", p).textContent = "Digite quanto querem ter guardado."; return; }
+      if (!/^\d{4}-\d{2}$/.test(pz) || pz < mesAtual()) { $("#pmE", p).textContent = "Escolha em quanto tempo."; return; }
+      patchEspaco({ proj_alvo: v, proj_prazo: pz, proj_inicial: i > 0 ? i : 0 });
+      const n = mesesAte(pz); if (n > (S.hor || 12)) { const h = HORIZ.find(([k]) => k >= n); S.hor = h ? h[0] : 60; ls.set("juntos:horizonte", S.hor); }
+      fecha(); render(); toast("Meta salva");
+    };
+    const d = $("#pmD", p); if (d) { let arm = false; d.onclick = (ev) => { if (!arm) { arm = true; ev.target.textContent = "Toque de novo para remover"; return; } patchEspaco({ proj_alvo: null, proj_prazo: null }); fecha(); render(); toast("Meta removida"); }; }
+  });
 }
 
 /* ---------- ações ---------- */
 document.addEventListener("click", (e) => {
-  const t = e.target.closest("[data-tab],[data-go],[data-cen],[data-pagar],[data-conta],[data-meta],[data-item],[data-novaconta],[data-mtab],[data-obj],[data-novoobj]");
+  const t = e.target.closest("[data-tab],[data-go],[data-cen],[data-pagar],[data-conta],[data-meta],[data-item],[data-novaconta],[data-mtab],[data-obj],[data-novoobj],[data-hor],[data-projmeta]");
   if (!t || t.closest("#panel")) return;
   if (t.dataset.tab || t.dataset.go) { S.tab = t.dataset.tab || t.dataset.go; render(); window.scrollTo(0, 0); return; }
   if (t.dataset.cen) { S.cen = t.dataset.cen; render(); return; }
+  if (t.dataset.hor) { S.hor = +t.dataset.hor; ls.set("juntos:horizonte", S.hor); render(); return; }
+  if (t.dataset.projmeta) return projMeta();
   if (t.dataset.pagar) { const id = t.dataset.pagar, on = !pago(id, S.mes); grava("pag", { conta_id: id, mes: S.mes, pago: on }); render(); toast(on ? "Conta marcada como paga" : "Conta desmarcada"); return; }
   if (t.dataset.conta) return editaConta(t.dataset.conta);
   if (t.dataset.meta) return editaMeta(t.dataset.meta);
@@ -778,7 +863,7 @@ async function perfil() {
     '<button class="btn secondary" id="pOutro">Entrar em outro espaço com código</button><button class="btn danger" id="pSair">Sair da conta</button><button class="btn secondary" id="pF">Fechar</button>', (p) => {
     $("#pF", p).onclick = fecha;
     p.querySelectorAll("[data-pessoa]").forEach((b) => (b.onclick = () => { fecha(); pessoa(b.dataset.pessoa); }));
-    $("#pS", p).onclick = () => { const v = parseNum($("#pR", p).value); if (!(v >= 0)) { toast("Digite a renda"); return; } D.espaco.renda = v; salvaD(); fila = fila.filter((f) => !(f.tab === "espaco" && f.e === E)); fila.push({ tab: "espaco", k: E, e: E, row: { renda: v } }); salvaFila(); agendaSync(); fecha(); render(); toast("Renda salva"); };
+    $("#pS", p).onclick = () => { const v = parseNum($("#pR", p).value); if (!(v >= 0)) { toast("Digite a renda"); return; } patchEspaco({ renda: v }); fecha(); render(); toast("Renda salva"); };
     p.querySelectorAll("[data-tema]").forEach((b) => (b.onclick = () => { tema = b.dataset.tema; ls.set("juntos:tema", tema); aplicaTema(); p.querySelectorAll("[data-tema]").forEach((x) => x.setAttribute("aria-pressed", x === b)); render(); }));
     $("#pSync", p).onclick = async () => { fecha(); await sync(); toast(SY.erro ? "Não sincronizou agora" : "Sincronizado"); };
     p.querySelectorAll("[data-esp]").forEach((b) => (b.onclick = () => { escolheEspaco(b.dataset.esp); fecha(); S.tab = "inicio"; render(); sync(); }));
