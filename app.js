@@ -361,6 +361,7 @@ async function pegaSessaoDoLink() {
   if (h.get("expires_at")) s.expires_at = +h.get("expires_at");
   try { const r = await fetch(URLB + "/auth/v1/user", { headers: { apikey: KEY, Authorization: "Bearer " + s.access_token } }); if (r.ok) s.user = await r.json(); } catch (e) {}
   history.replaceState(null, "", location.pathname + location.search);
+  if (h.get("type") === "recovery") ls.set("juntos:novaSenha", 1);
   if (s.user) { api.salvar(s); return true; }
   return false;
 }
@@ -733,6 +734,17 @@ async function iniciar() {
   if (ls.get("juntos:convitePend", null)) await usaConvitePendente();
   if (!E) return telaEspaco(navigator.onLine ? "" : "Conecte-se à internet para criar ou entrar em um espaço.");
   render(); sync();
+  if (ls.get("juntos:novaSenha", null)) novaSenha();
+}
+
+function novaSenha() {
+  abre('<h2>Crie uma nova senha</h2><label class="field">Nova senha<input id="nsS" type="password" autocomplete="new-password" minlength="6"></label><p class="err" id="nsE" role="alert"></p><button class="btn" id="nsB">Salvar senha</button>', (p) => {
+    $("#nsB", p).onclick = async () => {
+      const v = $("#nsS", p).value; if (v.length < 6) { $("#nsE", p).textContent = "A senha precisa de pelo menos 6 caracteres."; return; }
+      try { await api.req("/auth/v1/user", { method: "PUT", body: { password: v } }); ls.del("juntos:novaSenha"); fecha(); toast("Senha alterada"); }
+      catch (e) { $("#nsE", p).textContent = e.message; }
+    };
+  });
 }
 
 if ("serviceWorker" in navigator) window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
