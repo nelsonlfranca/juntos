@@ -322,7 +322,7 @@ function telaLogin(modo, msg) {
       if (criar) {
         const j = await api.auth("signup?redirect_to=" + encodeURIComponent(location.origin + location.pathname), { email: em, password: se, data: { nome } });
         if (j.access_token) { api.salvar(j); return iniciar(); }
-        telaLogin("entrar", ""); $("#lEmail").value = em; $("#lErr").style.color = "var(--primary-text)"; $("#lErr").textContent = "Conta criada. Abra o e-mail de confirmação e depois entre aqui."; return;
+        return telaConfirma(em, se);
       }
       const j = await api.auth("token?grant_type=password", { email: em, password: se });
       api.salvar(j); iniciar();
@@ -330,12 +330,54 @@ function telaLogin(modo, msg) {
   };
 }
 
+/* espera a confirmação do e-mail e entra sozinho quando a pessoa volta para o app */
+let confirmaPend = null;
+function telaConfirma(email, senha) {
+  confirmaPend = { email, senha };
+  $("#tabs").hidden = true;
+  $("#root").innerHTML = '<main class="auth" id="view"><div class="brand">' + LOGO + '<h1>Quase lá</h1></div>' +
+    '<div class="card" style="display:flex;flex-direction:column;gap:12px"><p style="margin:0;font-size:16px;line-height:1.5">Enviamos um e-mail para <b>' + esc(email) + '</b>. Toque no link de confirmação dentro dele.</p>' +
+    '<p class="small muted" style="margin:0">Se o link abrir outra página, tudo bem: a conta fica confirmada. Volte para cá que o Juntos entra sozinho.</p>' +
+    '<p class="err" id="cErr" role="alert"></p><button class="btn" id="cBtn">Já confirmei, entrar</button><button class="linkbtn" id="cVoltar" style="align-self:center">Usar outro e-mail</button></div>' +
+    '<p class="xs muted" style="text-align:center">Não chegou? Olhe a caixa de spam e a aba Promoções.</p></main>';
+  $("#cVoltar").onclick = () => { confirmaPend = null; telaLogin("criar"); };
+  $("#cBtn").onclick = () => tentaConfirmado(true);
+}
+async function tentaConfirmado(manual) {
+  if (!confirmaPend || !navigator.onLine) return;
+  try {
+    const j = await api.auth("token?grant_type=password", { email: confirmaPend.email, password: confirmaPend.senha });
+    confirmaPend = null; api.salvar(j); iniciar();
+  } catch (e) { if (manual && $("#cErr")) $("#cErr").textContent = /confirme/i.test(e.message) ? "Ainda não aparece confirmado. Toque no link do e-mail e tente de novo." : e.message; }
+}
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && confirmaPend) tentaConfirmado(false); });
+window.addEventListener("focus", () => { if (confirmaPend) tentaConfirmado(false); });
+
+/* volta do link do e-mail com a sessão no endereço */
+async function pegaSessaoDoLink() {
+  const h = new URLSearchParams(location.hash.replace(/^#/, ""));
+  if (!h.get("access_token") || !h.get("refresh_token")) return false;
+  const s = { access_token: h.get("access_token"), refresh_token: h.get("refresh_token"), expires_in: +h.get("expires_in") || 3600 };
+  if (h.get("expires_at")) s.expires_at = +h.get("expires_at");
+  try { const r = await fetch(URLB + "/auth/v1/user", { headers: { apikey: KEY, Authorization: "Bearer " + s.access_token } }); if (r.ok) s.user = await r.json(); } catch (e) {}
+  history.replaceState(null, "", location.pathname + location.search);
+  if (s.user) { api.salvar(s); return true; }
+  return false;
+}
+/* convite pelo link: ?c=CODIGO */
+(function () { const c = new URLSearchParams(location.search).get("c"); if (c && /^[A-Za-z0-9]{4,10}$/.test(c)) { ls.set("juntos:convitePend", c.toUpperCase()); history.replaceState(null, "", location.pathname + location.hash); } })();
+async function usaConvitePendente() {
+  const c = ls.get("juntos:convitePend", null); if (!c || !navigator.onLine) return false;
+  try { const id = await api.req("/rest/v1/rpc/fin_entrar", { method: "POST", body: { p_codigo: c, p_meu_nome: api.meuNome() } }); ls.del("juntos:convitePend"); escolheEspaco(id); toast("Você entrou no espaço"); return true; }
+  catch (e) { ls.del("juntos:convitePend"); toast(e.message); return false; }
+}
+
 async function telaEspaco(msg) {
   $("#tabs").hidden = true;
   const nome = api.meuNome();
   $("#root").innerHTML = '<main class="auth" id="view"><div class="brand">' + LOGO + "<h1>Olá, " + esc(nome) + "</h1></div><p class=\"lead\">Crie o espaço da sua família ou entre no de alguém com o código de convite.</p>" +
     '<form id="fEsp" class="card" style="display:flex;flex-direction:column;gap:12px"><h2>Criar espaço</h2><label class="field">Nome do espaço<input id="eNome" value="' + esc("Casa de " + nome) + '" maxlength="60"></label><button class="btn" type="submit">Criar</button></form>' +
-    '<form id="fCod" class="card" style="display:flex;flex-direction:column;gap:12px"><h2>Tenho um convite</h2><label class="field">Código de 6 letras<input id="eCod" autocomplete="off" autocapitalize="characters" maxlength="8" style="text-transform:uppercase;letter-spacing:4px;font-weight:800"></label><button class="btn secondary" type="submit">Entrar no espaço</button></form>' +
+    '<form id="fCod" class="card" style="display:flex;flex-direction:column;gap:12px"><h2>Tenho um convite</h2><label class="field">Código de 6 letras<input id="eCod" autocomplete="off" autocapitalize="characters" maxlength="8" value="' + esc(ls.get("juntos:convitePend", "") || "") + '" style="text-transform:uppercase;letter-spacing:4px;font-weight:800"></label><button class="btn secondary" type="submit">Entrar no espaço</button></form>' +
     '<p class="err" id="eErr" role="alert">' + esc(msg || "") + '</p><button class="linkbtn" id="eSair" style="align-self:center">Sair da conta</button></main>';
   $("#eSair").onclick = sairConta;
   $("#fEsp").onsubmit = async (ev) => {
@@ -349,8 +391,10 @@ async function telaEspaco(msg) {
   };
   $("#fCod").onsubmit = async (ev) => {
     ev.preventDefault(); const c = $("#eCod").value.trim(); if (!c) return;
-    try { const id = await api.req("/rest/v1/rpc/fin_entrar", { method: "POST", body: { p_codigo: c, p_meu_nome: nome } }); escolheEspaco(id); toast("Você entrou no espaço"); render(); sync(); }
-    catch (e) { $("#eErr").textContent = e.message; }
+    const b = ev.submitter || $("#fCod button"); if (b) { b.disabled = true; b.textContent = "Entrando…"; }
+    if (!navigator.onLine) { $("#eErr").textContent = "Para entrar com código, conecte-se à internet."; if (b) { b.disabled = false; b.textContent = "Entrar no espaço"; } return; }
+    try { const id = await api.req("/rest/v1/rpc/fin_entrar", { method: "POST", body: { p_codigo: c.replace(/[^A-Za-z0-9]/g, ""), p_meu_nome: nome } }); ls.del("juntos:convitePend"); escolheEspaco(id); toast("Você entrou no espaço"); render(); sync(); }
+    catch (e) { $("#eErr").textContent = e.status === 401 ? "Sua sessão expirou. Saia e entre de novo." : e.message; if (b) { b.disabled = false; b.textContent = "Entrar no espaço"; } }
   };
 }
 function escolheEspaco(id) { E = id; ls.set("juntos:espaco", id); carregaD(); }
@@ -664,7 +708,7 @@ async function perfil() {
         const c = await api.req("/rest/v1/rpc/fin_criar_convite", { method: "POST", body: { p_espaco: E } });
         const link = location.origin + location.pathname;
         box.innerHTML = '<div style="display:flex;flex-direction:column;gap:8px;margin-top:10px"><div class="code" id="pCode">' + esc(c) + '</div><span class="xs muted">Vale por 7 dias. A pessoa abre ' + esc(link) + ', cria a conta e digita o código.</span><button class="btn secondary" id="pCopy">Copiar convite</button></div>';
-        $("#pCopy", p).onclick = async () => { const txt = "Entre no nosso espaço do Juntos: abra " + link + ", crie sua conta e use o código " + c; try { await navigator.clipboard.writeText(txt); toast("Convite copiado"); } catch (e) { toast("Toque e segure o código para copiar"); } };
+        $("#pCopy", p).onclick = async () => { const txt = "Entre no nosso espaço do Juntos: abra " + link + "?c=" + c + " , crie sua conta (ou entre) e o convite já vem preenchido. Código: " + c; try { await navigator.clipboard.writeText(txt); toast("Convite copiado"); } catch (e) { toast("Toque e segure o código para copiar"); } };
       } catch (e) { box.innerHTML = '<p class="small" style="color:var(--warn)">' + esc(e.message) + "</p>"; }
     };
   });
@@ -672,7 +716,8 @@ async function perfil() {
 
 /* ---------- início ---------- */
 async function iniciar() {
-  if (!api.sess) return telaLogin("entrar");
+  if (!api.sess && location.hash.includes("access_token")) await pegaSessaoDoLink();
+  if (!api.sess) return telaLogin(ls.get("juntos:convitePend", null) ? "criar" : "entrar", ls.get("juntos:convitePend", null) ? "Você recebeu um convite. Crie sua conta ou entre para participar." : "");
   if (E) { carregaD(); render(); }
   if (navigator.onLine) {
     try {
@@ -685,6 +730,7 @@ async function iniciar() {
       if (e.status === 401 || /refresh|JWT|sem login/i.test(e.message)) { api.salvar(null); return telaLogin("entrar", "Sua sessão expirou. Entre de novo."); }
     }
   }
+  if (ls.get("juntos:convitePend", null)) await usaConvitePendente();
   if (!E) return telaEspaco(navigator.onLine ? "" : "Conecte-se à internet para criar ou entrar em um espaço.");
   render(); sync();
 }
