@@ -36,3 +36,8 @@ begin
 end $$;
 revoke execute on function public.fin_mudar_papel(uuid, uuid, text) from anon, public;
 grant execute on function public.fin_mudar_papel(uuid, uuid, text) to authenticated;
+
+-- Meta da projeção (já aplicado)
+alter table public.fin_espacos add column if not exists proj_alvo numeric check (proj_alvo is null or proj_alvo > 0);
+alter table public.fin_espacos add column if not exists proj_prazo text check (proj_prazo is null or proj_prazo ~ '^\d{4}-\d{2}$');
+alter table public.fin_espacos add column if not exists proj_inicial numeric not null default 0;
