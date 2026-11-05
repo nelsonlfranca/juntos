@@ -351,8 +351,18 @@ aplicaTema();
 /* ---------- toast e folha inferior ---------- */
 let tt; function toast(t) { const el = $("#toast"); el.textContent = t; el.hidden = false; clearTimeout(tt); tt = setTimeout(() => (el.hidden = true), 2400); }
 let ultimoFoco = null;
-function abre(html, montar) { ultimoFoco = document.activeElement; $("#panel").innerHTML = '<div class="grab" aria-hidden="true"></div>' + html; $("#sheet").hidden = false; document.body.style.overflow = "hidden"; montar && montar($("#panel")); }
-function fecha() { $("#sheet").hidden = true; $("#panel").innerHTML = ""; document.body.style.overflow = ""; ultimoFoco && ultimoFoco.focus && ultimoFoco.focus(); }
+let rolagemAntes = 0;
+function abre(html, montar) {
+  ultimoFoco = document.activeElement;
+  if ($("#sheet").hidden) { rolagemAntes = window.scrollY; document.body.classList.add("travado"); document.body.style.top = -rolagemAntes + "px"; }
+  $("#panel").innerHTML = html; $("#panel").scrollTop = 0; $("#sheet").hidden = false;
+  montar && montar($("#panel"));
+}
+function fecha() {
+  $("#sheet").hidden = true; $("#panel").innerHTML = "";
+  document.body.classList.remove("travado"); document.body.style.top = ""; window.scrollTo(0, rolagemAntes);
+  ultimoFoco && ultimoFoco.focus && ultimoFoco.focus({ preventScroll: true });
+}
 $("#sheet").addEventListener("click", (e) => { if (e.target.id === "sheet") fecha(); });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape" && !$("#sheet").hidden) fecha(); });
 
