@@ -994,6 +994,11 @@ function novaSenha() {
   });
 }
 
-if ("serviceWorker" in navigator) window.addEventListener("load", () => navigator.serviceWorker.register("sw.js").catch(() => {}));
+if ("serviceWorker" in navigator) {
+  // quando sai uma versão nova, o app recarrega sozinho (só se nenhuma janela estiver aberta)
+  let recarregou = false;
+  navigator.serviceWorker.addEventListener("controllerchange", () => { if (recarregou || !$("#sheet").hidden) return; recarregou = true; location.reload(); });
+  window.addEventListener("load", () => navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }).then((r) => { r.update().catch(() => {}); document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") r.update().catch(() => {}); }); }).catch(() => {}));
+}
 iniciar();
 })();
