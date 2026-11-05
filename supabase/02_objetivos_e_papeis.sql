@@ -41,3 +41,6 @@ grant execute on function public.fin_mudar_papel(uuid, uuid, text) to authentica
 alter table public.fin_espacos add column if not exists proj_alvo numeric check (proj_alvo is null or proj_alvo > 0);
 alter table public.fin_espacos add column if not exists proj_prazo text check (proj_prazo is null or proj_prazo ~ '^\d{4}-\d{2}$');
 alter table public.fin_espacos add column if not exists proj_inicial numeric not null default 0;
+
+-- Itens da nota fiscal (já aplicado)
+alter table public.fin_lancamentos add column if not exists itens jsonb;

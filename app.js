@@ -192,6 +192,7 @@ async function leNfcePendente(r) {
       if (!(+r.valor > 0) && n.total) upd.valor = n.total;
       if ((!r.descricao || r.descricao === "Nota fiscal") && n.loja) upd.descricao = String(n.loja).slice(0, 60);
       if (n.data) upd.data = n.data;
+      if (n.itens && n.itens.length) upd.itens = n.itens.filter((i) => i.nome).slice(0, 60);
       if (n.loja && (!r.categoria || r.categoria === "Pix e outros")) { const g = adivinha(n.loja.toLowerCase()); if (g) upd.categoria = g[1]; }
       grava("lanc", Object.assign({}, D.lanc[r.id], upd));
     } else {
@@ -206,18 +207,108 @@ function carregaJsQR() {
   if (!jsqrP) jsqrP = new Promise((res, rej) => { const s = document.createElement("script"); s.src = "https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"; s.onload = () => res(window.jsQR); s.onerror = () => { jsqrP = null; rej(new Error("leitor indisponível")); }; document.head.appendChild(s); });
   return jsqrP;
 }
-async function achaQR(blob) {
+// procura o QR Code em vários tamanhos e recortes (o QR costuma ficar no fim do cupom)
+async function achaQR(fonte) {
   const jsQR = await carregaJsQR();
-  const img = await createImageBitmap(blob);
-  for (const lado of [1400, 900, 2000]) {
-    const sc = Math.min(1, lado / Math.max(img.width, img.height));
-    const c = document.createElement("canvas"); c.width = Math.round(img.width * sc); c.height = Math.round(img.height * sc);
-    const g = c.getContext("2d", { willReadFrequently: true }); g.drawImage(img, 0, 0, c.width, c.height);
-    const d = g.getImageData(0, 0, c.width, c.height);
-    const q = jsQR(d.data, c.width, c.height, { inversionAttempts: "attemptBoth" });
-    if (q && q.data) return q.data;
+  const img = await createImageBitmap(fonte);
+  const W = img.width, H = img.height;
+  const recortes = [[0, 0, 1, 1], [0, 0.45, 1, 0.55], [0, 0.6, 1, 0.4], [0, 0.25, 1, 0.5], [0.1, 0.5, 0.8, 0.5], [0, 0, 1, 0.5]];
+  for (const lado of [1200, 1800, 800, 2600]) {
+    for (const [rx, ry, rw, rh] of recortes) {
+      const sx = rx * W, sy = ry * H, sw = rw * W, sh = rh * H;
+      const sc = Math.min(1, lado / Math.max(sw, sh));
+      const c = document.createElement("canvas"); c.width = Math.round(sw * sc); c.height = Math.round(sh * sc);
+      if (c.width < 60 || c.height < 60) continue;
+      const g = c.getContext("2d", { willReadFrequently: true }); g.drawImage(img, sx, sy, sw, sh, 0, 0, c.width, c.height);
+      const d = g.getImageData(0, 0, c.width, c.height);
+      const q = jsQR(d.data, c.width, c.height, { inversionAttempts: "attemptBoth" });
+      if (q && q.data) return q.data;
+    }
   }
   return null;
+}
+
+// leitura do texto da foto (OCR), feita no próprio celular, sem custo
+let tessP = null;
+function carregaTesseract() {
+  if (window.Tesseract) return Promise.resolve(window.Tesseract);
+  if (!tessP) tessP = new Promise((res, rej) => { const s = document.createElement("script"); s.src = "https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js"; s.onload = () => res(window.Tesseract); s.onerror = () => { tessP = null; rej(new Error("leitor indisponível")); }; document.head.appendChild(s); });
+  return tessP;
+}
+let tessWorker = null;
+async function lerTextoDaFoto(fonte, aoProgredir) {
+  const T = await carregaTesseract();
+  if (!tessWorker) tessWorker = await T.createWorker("por", 1, { logger: (m) => { if (m.status === "recognizing text" && aoProgredir) aoProgredir(m.progress); } });
+  const img = await createImageBitmap(fonte);
+  const sc = Math.min(1, 1700 / img.width);
+  const c = document.createElement("canvas"); c.width = Math.round(img.width * sc); c.height = Math.round(img.height * sc);
+  const g = c.getContext("2d", { willReadFrequently: true }); g.drawImage(img, 0, 0, c.width, c.height);
+  const d = g.getImageData(0, 0, c.width, c.height), px = d.data;
+  for (let i = 0; i < px.length; i += 4) { const y = 0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2]; const v = Math.max(0, Math.min(255, (y - 128) * 1.6 + 140)); px[i] = px[i + 1] = px[i + 2] = v; }
+  g.putImageData(d, 0, 0);
+  const r = await tessWorker.recognize(c);
+  return (r && r.data && r.data.text) || "";
+}
+
+// tira loja, total e data do texto do cupom
+function interpretaCupom(texto) {
+  const linhas = String(texto).split(/\r?\n/).map((l) => l.replace(/\s+/g, " ").trim()).filter(Boolean);
+  const VAL = /(\d{1,3}(?:[.\s]\d{3})*[.,]\s?\d{2})(?!\d)/g;
+  const num = (t) => { t = t.replace(/\s/g, ""); const dec = t.slice(-3, -2); const int = t.slice(0, -3).replace(/[.,]/g, ""); return parseFloat(int + "." + t.slice(-2)); };
+  const ruim = /tribut|imposto|troco|desconto|acr[eé]sc|qtd|quantidade|itens|lei\s*12|aprox|ibpt|cr[eé]dito\s*de|saldo|limite/i;
+  const pref = [/valor\s*(a\s*)?pag(ar|o)/i, /total\s*a\s*pagar/i, /valor\s*total/i, /vl\.?\s*total/i, /total\s*(geral|r\$)?/i];
+  let total = null;
+  for (const re of pref) {
+    for (let i = 0; i < linhas.length && total == null; i++) {
+      if (!re.test(linhas[i]) || ruim.test(linhas[i])) continue;
+      const aqui = linhas[i].match(VAL) || ((linhas[i + 1] || "").match(VAL) || []);
+      if (aqui.length) total = num(aqui[aqui.length - 1]);
+    }
+    if (total != null) break;
+  }
+  if (total == null) {
+    let mx = 0; linhas.forEach((l) => { if (ruim.test(l)) return; (l.match(VAL) || []).forEach((v) => { const n = num(v); if (n > mx && n < 100000) mx = n; }); });
+    if (mx > 0) total = mx;
+  }
+  let data = null;
+  for (const l of linhas) { const m = l.match(/\b(\d{2})[\/.-](\d{2})[\/.-](\d{4}|\d{2})\b/); if (m) { const y = m[3].length === 2 ? "20" + m[3] : m[3], mo = +m[2], d = +m[1]; if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31 && +y >= 2020) { data = y + "-" + pad(mo) + "-" + pad(d); break; } } }
+  let loja = null;
+  const pula = /cnpj|cpf|\bie\b|inscri|endere|rua |av\.|avenida|documento|auxiliar|nfc-?e|nota fiscal|consumidor|extrato|cupom|sat|fone|tel|cep|^\W*$/i;
+  for (const l of linhas.slice(0, 8)) { const letras = (l.match(/[A-Za-zÀ-ú]/g) || []).length; if (letras >= 4 && letras / l.length > 0.55 && !pula.test(l)) { loja = l.replace(/[^A-Za-zÀ-ú0-9&'. -]/g, "").trim().slice(0, 40); break; } }
+  if (loja) loja = loja.toLowerCase().replace(/(^|\s)\S/g, (c) => c.toUpperCase());
+  return { total, data, loja };
+}
+
+function escanearQR() {
+  return new Promise((resolve) => {
+    let stream = null, fim = false, raf = 0;
+    const fecharScan = (r) => { if (fim) return; fim = true; cancelAnimationFrame(raf); if (stream) stream.getTracks().forEach((t) => t.stop()); ov.remove(); resolve(r); };
+    const ov = document.createElement("div");
+    ov.className = "scan";
+    ov.innerHTML = '<video playsinline muted autoplay></video><div class="scan-mira" aria-hidden="true"></div><p class="scan-txt" role="status">Aponte para o QR Code no fim da nota</p><button class="btn secondary scan-x">Cancelar</button>';
+    document.body.appendChild(ov);
+    ov.querySelector(".scan-x").onclick = () => fecharScan(null);
+    const v = ov.querySelector("video"), txt = ov.querySelector(".scan-txt");
+    const c = document.createElement("canvas"), g = c.getContext("2d", { willReadFrequently: true });
+    Promise.all([carregaJsQR(), navigator.mediaDevices && navigator.mediaDevices.getUserMedia ? navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false }) : Promise.reject(new Error("sem câmera"))])
+      .then(([jsQR, s]) => {
+        stream = s; v.srcObject = s; v.play().catch(() => {});
+        const passo = () => {
+          if (fim) return;
+          if (v.readyState >= 2 && v.videoWidth) {
+            const lado = Math.min(v.videoWidth, v.videoHeight) * 0.8, sx = (v.videoWidth - lado) / 2, sy = (v.videoHeight - lado) / 2;
+            c.width = c.height = Math.min(640, Math.round(lado));
+            g.drawImage(v, sx, sy, lado, lado, 0, 0, c.width, c.height);
+            const d = g.getImageData(0, 0, c.width, c.height);
+            const q = jsQR(d.data, c.width, c.height, { inversionAttempts: "dontInvert" });
+            if (q && q.data) { if (navigator.vibrate) navigator.vibrate(60); return fecharScan(q.data); }
+          }
+          raf = requestAnimationFrame(passo);
+        };
+        raf = requestAnimationFrame(passo);
+      })
+      .catch(() => { txt.textContent = "Não consegui abrir a câmera. Permita o acesso à câmera nos ajustes do celular ou use a foto da nota."; });
+  });
 }
 async function comprime(file) {
   try {
@@ -605,7 +696,7 @@ function lancar(existente) {
   abre('<div class="row"><h2>' + (ex ? "Editar lançamento" : "Novo lançamento") + '</h2><button class="linkbtn" id="xClose">Cancelar</button></div>' +
     '<div class="seg" role="group" aria-label="Tipo"><button data-tp="s" aria-pressed="' + (st.t !== "e") + '">Gasto</button><button data-tp="e" aria-pressed="' + (st.t === "e") + '">Entrada</button></div>' +
     (ex ? "" : '<div class="field">Fale ou escreva o gasto<div style="display:flex;gap:8px"><input id="fFala" placeholder="Ex.: 45 no mercado, no débito" autocomplete="off" enterkeyhint="done" style="flex:1;min-width:0"><button class="btn" id="fFalaOk" type="button" style="width:auto;height:48px;padding:0 16px;font-size:14px">Preencher</button></div><span class="note" id="falaStatus" style="color:var(--muted);font-weight:600">Toque no campo e use o microfone do teclado.</span></div>' +
-      '<div><label class="nfbtn" for="fFoto" id="nfLabel"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>Foto da nota fiscal</label><input id="fFoto" class="vh" type="file" accept="image/*"><div class="nfprev" id="nfPrev" hidden><img id="nfThumb" alt="Nota fiscal escolhida"><div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:4px"><b class="small">Nota anexada</b><span class="note" id="nfStatus" style="color:var(--muted)"></span></div><button class="linkbtn" type="button" id="nfTirar">Remover</button></div></div>') +
+      '<div><div class="grid2" id="nfLabel"><button type="button" class="nfbtn" id="nfScan"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><path d="M8 8h3v3H8zM13 13h3v3h-3zM13 8h3M8 16h3"/></svg>Escanear QR</button><label class="nfbtn" for="fFoto"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>Foto da nota</label></div><input id="fFoto" class="vh" type="file" accept="image/*"><div class="nfprev" id="nfPrev" hidden><img id="nfThumb" alt="Nota fiscal escolhida"><div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:4px"><b class="small">Nota anexada</b><span class="note" id="nfStatus" style="color:var(--muted)"></span></div><button class="linkbtn" type="button" id="nfTirar">Remover</button></div></div>') +
     '<label class="field amount">Valor<input id="fValor" inputmode="decimal" placeholder="R$ 0,00" autocomplete="off" value="' + (ex ? esc(String(ex.valor).replace(".", ",")) : "") + '"></label>' +
     '<label class="field">Onde<input id="fDesc" placeholder="Ex.: Padaria" autocomplete="off" maxlength="60" value="' + esc(ex ? ex.descricao || "" : "") + '"></label>' +
     '<div class="field" id="boxCat"' + (st.t === "e" ? " hidden" : "") + '>Categoria<div class="chips" role="group" aria-label="Categoria">' + chips(CATS, "cat", st.c) + '</div><span class="note" id="fInfo"></span></div>' +
@@ -648,27 +739,53 @@ function lancar(existente) {
       const fala = () => { const tx = $("#fFala", p).value.trim(), s = $("#falaStatus", p); if (!tx) { s.textContent = "Diga algo como: 32 reais na padaria ontem."; $("#fFala", p).focus(); return; } aplica(lerFrase(tx)); s.textContent = "Preenchido. Confira e salve."; s.style.color = "var(--primary-text)"; };
       $("#fFalaOk", p).onclick = fala;
       $("#fFala", p).addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); fala(); } });
-      $("#nfTirar", p).onclick = () => { st.foto = null; st.nfce = null; $("#nfPrev", p).hidden = true; $("#nfLabel", p).hidden = false; $("#fFoto", p).value = ""; };
-      $("#fFoto", p).addEventListener("change", async (e) => {
-        const f = e.target.files && e.target.files[0]; if (!f) return;
-        const s = $("#nfStatus", p); s.style.color = "var(--muted)"; s.textContent = "Preparando a foto…";
-        $("#nfPrev", p).hidden = false; $("#nfLabel", p).hidden = true;
-        st.foto = await comprime(f);
-        try { $("#nfThumb", p).src = URL.createObjectURL(st.foto); } catch (err) {}
-        s.textContent = "Procurando o QR Code…";
-        let qr = null; try { qr = await achaQR(st.foto); } catch (err) { qr = null; }
-        if (!qr || !/^https?:\/\/[^/]*\.gov\.br/i.test(qr)) { s.textContent = qr ? "O QR Code não é de nota fiscal. Preencha o valor." : "Não achei o QR Code. Preencha o valor, ou tire outra foto com o QR nítido."; return; }
+      $("#nfTirar", p).onclick = () => { st.foto = null; st.nfce = null; st.itens = null; $("#nfPrev", p).hidden = true; $("#nfLabel", p).hidden = false; $("#fFoto", p).value = ""; };
+      const mostra = (txt, ok) => { const s = $("#nfStatus", p); s.textContent = txt; s.style.color = ok ? "var(--primary-text)" : "var(--muted)"; $("#nfPrev", p).hidden = false; $("#nfLabel", p).hidden = true; };
+      // nota com QR: busca na SEFAZ e salva sozinho
+      const pelaSefaz = async (qr) => {
+        if (!/^https?:\/\/[^/]*\.gov\.br/i.test(qr)) return false;
         st.nfce = qr;
-        if (!navigator.onLine) { s.textContent = "Sem internet: a nota será lida quando conectar. Pode salvar agora."; s.style.color = "var(--primary-text)"; return; }
-        s.textContent = "Lendo a nota na SEFAZ…";
+        if (!navigator.onLine) { mostra("Sem internet: a nota será lida quando conectar. Salve agora.", true); return true; }
+        mostra("Lendo a nota na SEFAZ…");
         try {
           const n = await consultaNfce(qr);
-          if (n && n.ok) { aplica({ valor: n.total, loja: n.loja, data: n.data, categoria: n.loja ? (adivinha(n.loja.toLowerCase()) || [])[1] : null }); s.textContent = "Preenchido pela nota fiscal. Confira e salve."; s.style.color = "var(--primary-text)"; }
-          else { s.textContent = "A SEFAZ não respondeu agora. Salve: o app tenta de novo depois."; }
-        } catch (err) { s.textContent = "Não consegui ler agora. Salve: o app tenta de novo depois."; }
+          if (n && n.ok && n.total > 0) {
+            st.itens = (n.itens || []).filter((i) => i.nome).slice(0, 60);
+            aplica({ valor: n.total, loja: n.loja, data: n.data, categoria: n.loja ? (adivinha(n.loja.toLowerCase()) || [])[1] : null });
+            mostra("Lido: " + brl.format(n.total) + (st.itens.length ? " · " + st.itens.length + " itens" : ""), true);
+            salvar(true);
+            return true;
+          }
+        } catch (err) {}
+        mostra("A SEFAZ não respondeu. Salve: o app tenta de novo depois.");
+        return true;
+      };
+      $("#nfScan", p).onclick = async () => {
+        const qr = await escanearQR(); if (!qr) return;
+        if (!(await pelaSefaz(qr))) { mostra("Esse QR Code não é de nota fiscal."); }
+      };
+      $("#fFoto", p).addEventListener("change", async (e) => {
+        const f = e.target.files && e.target.files[0]; if (!f) return;
+        mostra("Preparando a foto…");
+        st.foto = await comprime(f);
+        try { $("#nfThumb", p).src = URL.createObjectURL(st.foto); } catch (err) {}
+        mostra("Procurando o QR Code…");
+        let qr = null; try { qr = await achaQR(f); } catch (err) { qr = null; }
+        if (qr && (await pelaSefaz(qr))) return;
+        // sem QR: lê o texto da foto
+        mostra("Lendo os valores da nota…");
+        try {
+          const texto = await lerTextoDaFoto(f, (pr) => mostra("Lendo os valores da nota… " + Math.round(pr * 100) + "%"));
+          const r = interpretaCupom(texto);
+          if (r.total) {
+            aplica({ valor: r.total, loja: r.loja, data: r.data, categoria: r.loja ? (adivinha(r.loja.toLowerCase()) || [])[1] : null });
+            mostra("Li " + brl.format(r.total) + (r.loja ? " em " + r.loja : "") + ". Confira e toque em Salvar.", true);
+            $("#fSalvar", p).scrollIntoView({ behavior: "smooth", block: "center" });
+          } else mostra("Não consegui ler o valor. Digite o valor abaixo.");
+        } catch (err) { mostra(navigator.onLine ? "Não consegui ler a foto. Digite o valor abaixo." : "Sem internet para ler a foto agora. Digite o valor."); }
       });
     }
-    $("#fSalvar", p).onclick = async () => {
+    const salvar = async (auto) => {
       let v = parseNum($("#fValor", p).value);
       const pendente = !(v > 0) && !!st.nfce && !ex;
       if (!(v > 0) && !pendente) { toast("Digite um valor, por exemplo 29,90"); $("#fValor", p).focus(); return; }
@@ -677,13 +794,15 @@ function lancar(existente) {
       const row = { id, data: d, descricao: $("#fDesc", p).value.trim().slice(0, 60) || (pendente ? "Nota fiscal" : st.t === "e" ? "Entrada" : st.c), valor: Math.round(v * 100) / 100, tipo: st.t, categoria: st.t === "e" ? "Entrada" : st.c, quem: st.q, conta: st.k, deleted: false };
       if (!ex) row.criado_por = api.uid();
       if (st.nfce) row.nfce_url = st.nfce;
+      if (st.itens && st.itens.length) row.itens = st.itens;
       if (pendente) row._nfce = true;
       if (st.foto) { row.nota_path = E + "/" + id + ".jpg"; await fotos.put(id, st.foto); const pend = ls.get("juntos:fotosPend", []); pend.push({ id, path: row.nota_path }); ls.set("juntos:fotosPend", pend); }
       grava("lanc", row);
-      fecha(); toast(pendente ? "Salvo. O valor entra quando a nota for lida." : ex ? "Alterado" : "Lançado");
+      fecha(); toast(pendente ? "Salvo. O valor entra quando a nota for lida." : ex ? "Alterado" : auto ? "Lançado pela nota: " + brl.format(row.valor) + ". Toque nele para conferir." : "Lançado");
       if (d.slice(0, 7) !== S.mes) S.mes = d.slice(0, 7);
       render();
     };
+    $("#fSalvar", p).onclick = () => salvar(false);
     info();
   });
 }
@@ -692,7 +811,7 @@ function detalheItem(id) {
   const r = D.lanc[id]; if (!r) return;
   abre('<h2>' + esc(r.descricao) + '</h2><div class="card"><div class="list">' +
     [["Valor", brl.format(+r.valor)], ["Categoria", r.categoria], ["Data", new Date(r.data + "T12:00:00").toLocaleDateString("pt-BR")], ["Pagou com", r.conta], ["Quem", r.quem]].map(([a, b]) => '<div class="item" style="cursor:default"><span class="main muted">' + esc(a) + '</span><span class="amt">' + esc(b) + "</span></div>").join("") +
-    "</div></div>" + (r.nota_path ? '<div id="dNota" class="small muted" style="text-align:center">Carregando a nota…</div>' : "") +
+    "</div></div>" + (Array.isArray(r.itens) && r.itens.length ? '<div class="card"><span class="label">Itens da nota</span><div class="list" style="margin-top:4px">' + r.itens.map((i) => '<div class="item" style="cursor:default;padding:7px 0"><span class="main small">' + esc(i.nome) + '</span><span class="small num">' + (i.valor != null ? esc(brl.format(+i.valor)) : "") + "</span></div>").join("") + "</div></div>" : "") + (r.nota_path ? '<div id="dNota" class="small muted" style="text-align:center">Carregando a nota…</div>' : "") +
     (r._nfce ? '<p class="small" style="margin:0;color:var(--amber);font-weight:700">A nota será lida assim que houver internet.</p>' : "") +
     '<div class="row-actions"><button class="btn secondary" id="dEd">Editar</button><button class="btn danger" id="dDel">Apagar</button></div><button class="btn secondary" id="dOk">Fechar</button>', async (p) => {
     $("#dOk", p).onclick = fecha;
