@@ -138,3 +138,22 @@ nav.tabs .in{max-width:520px;margin:0 auto;display:flex;justify-content:space-ar
 .scan-mira{position:absolute;left:50%;top:45%;width:min(70vw,300px);aspect-ratio:1;transform:translate(-50%,-50%);border:3px solid #7FD3AE;border-radius:24px;box-shadow:0 0 0 9999px rgba(0,0,0,.45)}
 .scan-txt{position:relative;color:#fff;font-weight:700;text-align:center;margin:0;max-width:32ch}
 .scan .btn{position:relative;max-width:420px}
+
+/* ---- celular: ocupa a tela toda, sem rolagem lateral nem barra de rolagem ---- */
+html,body{width:100%;max-width:100%;overflow-x:hidden;overscroll-behavior:none;-webkit-text-size-adjust:100%;text-size-adjust:100%}
+body{position:relative;touch-action:pan-y}
+html{scrollbar-width:none}
+html::-webkit-scrollbar,body::-webkit-scrollbar,.panel::-webkit-scrollbar,*::-webkit-scrollbar{display:none;width:0;height:0;background:transparent}
+.panel{overflow-x:hidden;scrollbar-width:none;overscroll-behavior:contain;-webkit-overflow-scrolling:touch}
+.app,#view,main,section,.card,.hero,.field,.list,.item,.chips,.grid2,.row,.row-actions{min-width:0;max-width:100%}
+.app{width:100%}
+input,select,textarea,button{max-width:100%;min-width:0;font-size:16px}
+.chip,.seg button,.linkbtn,.tab,.nfbtn{font-size:13px}
+.btn{font-size:16px}
+/* campos de data/mês do iPhone têm largura própria e estouram a tela */
+input[type=date],input[type=month]{-webkit-appearance:none;appearance:none;display:block;width:100%;min-width:0;text-align:left;line-height:48px}
+input[type=date]::-webkit-date-and-time-value,input[type=month]::-webkit-date-and-time-value{text-align:left}
+.item .main b,.item .main span{overflow:hidden;text-overflow:ellipsis}
+.amt{flex-shrink:0}
+.toast{max-width:calc(100% - 32px);text-align:center}
+.scan{overflow:hidden}
