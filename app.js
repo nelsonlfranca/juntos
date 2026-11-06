@@ -9,7 +9,10 @@ const KEY = CFG.supabaseKey, URLB = CFG.supabaseUrl;
 const CATS = ["Mercado","Lanches e café","Delivery","Restaurantes","Uber e transporte","Saúde","Compras online","Pet","Roupas e beleza","Pix e outros"];
 const METAS_PADRAO = {"Mercado":800,"Lanches e café":250,"Delivery":150,"Restaurantes":200,"Uber e transporte":150,"Saúde":150,"Compras online":150,"Pet":150,"Roupas e beleza":150,"Pix e outros":150};
 const ABBR = {"Mercado":"Me","Lanches e café":"La","Delivery":"De","Restaurantes":"Re","Uber e transporte":"Ub","Saúde":"Sa","Compras online":"Co","Pet":"Pe","Roupas e beleza":"Ro","Pix e outros":"Px"};
-const CONTAS = ["Nubank débito","Nubank PJ","Itaú crédito","Efí crédito","Dinheiro"];
+const FORMAS_PADRAO = ["Débito","Crédito","Pix","Dinheiro"];
+// formas de pagamento do espaço (cada família tem as suas); espaço novo começa com as genéricas
+const contas = () => (D && D.espaco && Array.isArray(D.espaco.formas) && D.espaco.formas.length ? D.espaco.formas : FORMAS_PADRAO);
+const achaForma = (re) => contas().find((x) => re.test(x.toLowerCase()));
 const QUEM = ["Eu","Parceiro(a)","Casa"];
 const MESES = ["janeiro","fevereiro","março","abril","maio","junho","julho","agosto","setembro","outubro","novembro","dezembro"];
 const brl = new Intl.NumberFormat("pt-BR", { style: "currency", currency: "BRL" });
@@ -143,7 +146,7 @@ async function sync() {
     // 3. notas com QR Code esperando leitura
     for (const r of Object.values(D.lanc)) if (r._nfce && r.nfce_url && !r.deleted) await leNfcePendente(r);
     // 4. recebe as mudanças dos outros
-    const esp = await api.req("/rest/v1/fin_espacos?id=eq." + E + "&select=id,nome,renda,proj_alvo,proj_prazo,proj_inicial");
+    const esp = await api.req("/rest/v1/fin_espacos?id=eq." + E + "&select=id,nome,renda,proj_alvo,proj_prazo,proj_inicial,formas");
     if (esp && esp[0]) D.espaco = esp[0];
     else { // perdeu acesso a este espaço
       SY.rodando = false; sairDoEspaco(); return;
@@ -428,7 +431,7 @@ function lerFrase(txt) {
   const t = " " + txt.toLowerCase() + " "; const o = {};
   { const v = valorFalado(t); if (v != null) o.valor = v; }
   const g = adivinha(t); if (g) o.categoria = g[1];
-  if (/ita[uú]/.test(t)) o.pagamento = "Itaú crédito"; else if (/ef[ií]/.test(t)) o.pagamento = "Efí crédito"; else if (/cr[eé]dito|cart[aã]o/.test(t)) o.pagamento = "Itaú crédito"; else if (/\bpj\b|empresa|ag[eê]ncia/.test(t)) o.pagamento = "Nubank PJ"; else if (/dinheiro/.test(t)) o.pagamento = "Dinheiro"; else if (/d[eé]bito|pix|nubank/.test(t)) o.pagamento = "Nubank débito";
+  { const f = /ita[uú]/.test(t) ? achaForma(/ita[uú]/) : /ef[ií]/.test(t) ? achaForma(/ef[ií]/) : /\bpj\b|empresa|ag[eê]ncia/.test(t) ? achaForma(/\bpj\b/) : /cr[eé]dito|cart[aã]o/.test(t) ? achaForma(/cr[eé]dito/) : /dinheiro/.test(t) ? achaForma(/dinheiro/) : /\bpix\b/.test(t) ? (achaForma(/\bpix\b/) || achaForma(/d[eé]bito/)) : /d[eé]bito|nubank/.test(t) ? achaForma(/d[eé]bito/) : null; if (f) o.pagamento = f; }
   if (/marido|esposa|parceir|nelson/.test(t)) o.quem = "Parceiro(a)"; else if (/\bcasa\b|n[oó]s dois|casal/.test(t)) o.quem = "Casa";
   if (/anteontem/.test(t)) { const d = hoje(); d.setDate(d.getDate() - 2); o.data = ymd(d); } else if (/ontem/.test(t)) { const d = hoje(); d.setDate(d.getDate() - 1); o.data = ymd(d); }
   if (/recebi|entrou|ganhei|sal[aá]rio/.test(t)) o.tipo = "e";
@@ -687,7 +690,7 @@ function vLancamentos() {
 function vContas() {
   const m = S.mes, cs = contasDoMes(m);
   const tot = cs.reduce((a, c) => a + c.valor, 0), pg = cs.filter((c) => pago(c.id, m)).reduce((a, c) => a + c.valor, 0);
-  const credAnt = gastos(itensMes(addM(m, -1))).filter((i) => /crédito/.test(i.k || "")).reduce((a, i) => a + i.v, 0);
+  const credAnt = gastos(itensMes(addM(m, -1))).filter((i) => /cr[eé]dito/i.test(i.k || "")).reduce((a, i) => a + i.v, 0);
   let h = '<section class="card" style="display:flex;flex-direction:column;gap:10px"><div class="row"><span class="label">Contas de ' + esc(nomeM(m)) + '</span><span class="pill" style="background:var(--primary-soft);color:var(--primary-text)">' + cs.filter((c) => pago(c.id, m)).length + " de " + cs.length + " pagas</span></div>";
   h += '<div class="row"><span class="num" style="font-family:var(--f-display);font-size:32px;font-weight:700;letter-spacing:-.8px">' + esc(brl0.format(tot - pg)) + '</span><span class="small muted num">faltam de ' + esc(brl0.format(tot)) + '</span></div><div class="track"><div class="fill" style="width:' + (tot ? (pg / tot) * 100 : 0) + '%"></div></div></section>';
   if (!cs.length) h += '<div class="card empty"><b>Nenhuma conta em ' + esc(nomeM(m)) + "</b>Adicione aluguel, luz, internet e o que mais vence todo mês.</div>";
@@ -803,7 +806,7 @@ $("#btnAdd").onclick = () => lancar();
 
 function lancar(existente) {
   const ex = existente || null;
-  const st = ex ? { t: ex.tipo || "s", c: ex.categoria || "Mercado", q: ex.quem || "Eu", k: ex.conta || "Nubank débito", nfce: ex.nfce_url || null } : { t: "s", c: "Mercado", q: "Eu", k: "Nubank débito", nfce: null };
+  const st = ex ? { t: ex.tipo || "s", c: ex.categoria || "Mercado", q: ex.quem || "Eu", k: ex.conta || contas()[0], nfce: ex.nfce_url || null } : { t: "s", c: "Mercado", q: "Eu", k: contas()[0], nfce: null };
   const chips = (arr, attr, val) => arr.map((x) => '<button type="button" class="chip" data-' + attr + '="' + esc(x) + '" aria-pressed="' + (val === x) + '">' + esc(x) + "</button>").join("");
   abre('<div class="row"><h2>' + (ex ? "Editar lançamento" : "Novo lançamento") + '</h2><button class="linkbtn" id="xClose">Cancelar</button></div>' +
     '<div class="seg" role="group" aria-label="Tipo"><button data-tp="s" aria-pressed="' + (st.t !== "e") + '">Gasto</button><button data-tp="e" aria-pressed="' + (st.t === "e") + '">Entrada</button></div>' +
@@ -813,7 +816,7 @@ function lancar(existente) {
     '<label class="field">Onde<input id="fDesc" placeholder="Ex.: Padaria" autocomplete="off" maxlength="60" value="' + esc(ex ? ex.descricao || "" : "") + '"></label>' +
     '<div class="field" id="boxCat"' + (st.t === "e" ? " hidden" : "") + '>Categoria<div class="chips" role="group" aria-label="Categoria">' + chips(CATS, "cat", st.c) + '</div><span class="note" id="fInfo"></span></div>' +
     '<div class="field">Quem<div class="chips" role="group" aria-label="Quem">' + chips(QUEM, "quem", st.q) + "</div></div>" +
-    '<div class="field">Pagou com<div class="chips" role="group" aria-label="Forma de pagamento">' + chips(CONTAS, "pg", st.k) + '</div><span class="note" id="fCred" style="color:var(--warn)" hidden>Conta no limite deste mês e cai na próxima fatura.</span></div>' +
+    '<div class="field">Pagou com<div class="chips" role="group" aria-label="Forma de pagamento">' + chips(contas().includes(st.k) ? contas() : contas().concat([st.k]), "pg", st.k) + '</div><span class="note" id="fCred" style="color:var(--warn)" hidden>Conta no limite deste mês e cai na próxima fatura.</span></div>' +
     '<label class="field">Data<input id="fData" type="date" value="' + (ex ? esc(ex.data) : ymd(hoje())) + '"></label>' +
     '<button class="btn" id="fSalvar">' + (ex ? "Salvar alterações" : "Salvar lançamento") + "</button>", (p) => {
     const info = () => {
@@ -821,7 +824,7 @@ function lancar(existente) {
       const base = porCat(itensMes(dm).filter((i) => !ex || i.id !== ex.id)), m = metas()[st.c] || 0, us = (base[st.c] || 0) + v, inf = $("#fInfo", p);
       inf.textContent = st.t === "e" || !m ? "" : us <= m ? st.c + ": sobram " + brl0.format(m - us) + " da meta depois deste." : st.c + ": passa " + brl0.format(us - m) + " da meta.";
       inf.style.color = us > m ? "var(--warn)" : "var(--primary-text)";
-      $("#fCred", p).hidden = !/crédito/.test(st.k);
+      $("#fCred", p).hidden = !/cr[eé]dito/i.test(st.k);
     };
     const marca = (attr, v) => p.querySelectorAll("[data-" + attr + "]").forEach((x) => x.setAttribute("aria-pressed", x.dataset[attr] === v));
     const setCat = (c) => { if (CATS.includes(c)) { st.c = c; marca("cat", c); } };
@@ -831,7 +834,7 @@ function lancar(existente) {
       if (r.loja) $("#fDesc", p).value = String(r.loja).slice(0, 60);
       if (r.data && /^\d{4}-\d{2}-\d{2}$/.test(r.data)) $("#fData", p).value = r.data;
       setCat(r.categoria);
-      if (CONTAS.includes(r.pagamento)) { st.k = r.pagamento; marca("pg", st.k); }
+      if (contas().includes(r.pagamento)) { st.k = r.pagamento; marca("pg", st.k); }
       if (QUEM.includes(r.quem)) { st.q = r.quem; marca("quem", st.q); }
       info();
     };

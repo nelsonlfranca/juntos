@@ -1,6 +1,6 @@
 // Service worker do Juntos: guarda o app no celular para abrir sem internet.
 // Os dados do banco (Supabase) nunca passam por este cache.
-const VERSAO = "juntos-v2.6.0";
+const VERSAO = "juntos-v2.6.1";
 const APP = ["./", "index.html", "styles.css", "app.js", "config.js", "manifest.webmanifest", "icons/icon-192.png", "icons/icon-512.png", "icons/apple-touch-icon.png"];
 const EXTERNOS = [];
 
