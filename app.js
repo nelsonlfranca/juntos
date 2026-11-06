@@ -236,16 +236,39 @@ function carregaTesseract() {
   return tessP;
 }
 let tessWorker = null;
+// deixa a foto em preto e branco nítido, corrigindo sombra e luz desigual (limiar local)
+async function preparaImagem(fonte) {
+  const img = await createImageBitmap(fonte);
+  const sc = Math.min(3000 / Math.max(img.width, img.height), 1800 / img.width);
+  const W = Math.round(img.width * sc), H = Math.round(img.height * sc);
+  const c = document.createElement("canvas"); c.width = W; c.height = H;
+  const g = c.getContext("2d", { willReadFrequently: true }); g.imageSmoothingQuality = "high"; g.drawImage(img, 0, 0, W, H);
+  const d = g.getImageData(0, 0, W, H), px = d.data, n = W * H;
+  const cinza = new Float32Array(n);
+  for (let i = 0, j = 0; j < n; i += 4, j++) cinza[j] = 0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2];
+  const integ = new Float64Array((W + 1) * (H + 1));
+  for (let y = 1; y <= H; y++) { let linha = 0; for (let x = 1; x <= W; x++) { linha += cinza[(y - 1) * W + (x - 1)]; integ[y * (W + 1) + x] = integ[(y - 1) * (W + 1) + x] + linha; } }
+  const r = Math.max(8, Math.round(W / 28));
+  for (let y = 0; y < H; y++) {
+    const y0 = Math.max(0, y - r), y1 = Math.min(H, y + r + 1);
+    for (let x = 0; x < W; x++) {
+      const x0 = Math.max(0, x - r), x1 = Math.min(W, x + r + 1);
+      const soma = integ[y1 * (W + 1) + x1] - integ[y0 * (W + 1) + x1] - integ[y1 * (W + 1) + x0] + integ[y0 * (W + 1) + x0];
+      const media = soma / ((x1 - x0) * (y1 - y0)), j = y * W + x, v = cinza[j] < media * 0.86 ? 0 : 255, i = j * 4;
+      px[i] = px[i + 1] = px[i + 2] = v;
+    }
+  }
+  g.putImageData(d, 0, 0);
+  return c;
+}
 async function lerTextoDaFoto(fonte, aoProgredir) {
   const T = await carregaTesseract();
-  if (!tessWorker) tessWorker = await T.createWorker("por", 1, { logger: (m) => { if (m.status === "recognizing text" && aoProgredir) aoProgredir(m.progress); } });
-  const img = await createImageBitmap(fonte);
-  const sc = Math.min(1, 1700 / img.width);
-  const c = document.createElement("canvas"); c.width = Math.round(img.width * sc); c.height = Math.round(img.height * sc);
-  const g = c.getContext("2d", { willReadFrequently: true }); g.drawImage(img, 0, 0, c.width, c.height);
-  const d = g.getImageData(0, 0, c.width, c.height), px = d.data;
-  for (let i = 0; i < px.length; i += 4) { const y = 0.299 * px[i] + 0.587 * px[i + 1] + 0.114 * px[i + 2]; const v = Math.max(0, Math.min(255, (y - 128) * 1.6 + 140)); px[i] = px[i + 1] = px[i + 2] = v; }
-  g.putImageData(d, 0, 0);
+  lerTextoDaFoto.prog = aoProgredir;
+  if (!tessWorker) {
+    tessWorker = await T.createWorker("por", 1, { logger: (m) => { if (m.status === "recognizing text" && lerTextoDaFoto.prog) lerTextoDaFoto.prog(m.progress); } });
+    await tessWorker.setParameters({ tessedit_pageseg_mode: "4", preserve_interword_spaces: "1" });
+  }
+  const c = await preparaImagem(fonte);
   const r = await tessWorker.recognize(c);
   return (r && r.data && r.data.text) || "";
 }
@@ -281,12 +304,14 @@ function interpretaCupom(texto) {
   // 4. sem rótulo nenhum: maior valor que não seja imposto/troco
   if (total == null) { let mx = 0; linhas.forEach((l) => { if (!ruim.test(l)) valores(l).forEach((n) => { if (n > mx) mx = n; }); }); if (mx > 0) total = mx; }
   let data = null;
-  for (const l of linhas) { const m = l.match(/\b(\d{2})[\/.-](\d{2})[\/.-](\d{4}|\d{2})\b/); if (m) { const y = m[3].length === 2 ? "20" + m[3] : m[3], mo = +m[2], d = +m[1]; if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31 && +y >= 2020) { data = y + "-" + pad(mo) + "-" + pad(d); break; } } }
+  for (const l of linhas) { const m = l.match(/\b(\d{2})[\/.-](\d{2})[\/.-](\d{4}|\d{2})\b/); if (m) { const conserta = (t, max) => (+t > max && /^[689]/.test(t) ? +("0" + t[1]) : +t); const y = m[3].length === 2 ? "20" + m[3] : m[3], mo = conserta(m[2], 12), d = conserta(m[1], 31); if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31 && +y >= 2020) { data = y + "-" + pad(mo) + "-" + pad(d); break; } } }
   let loja = null;
   const pula = /cnpj|cpf|\bie\b|inscri|endere|rua |av\.|avenida|documento|auxiliar|nfc-?e|nota fiscal|consumidor|extrato|cupom|sat|fone|tel|cep|^\W*$/i;
   for (const l of linhas.slice(0, 8)) { const letras = (l.match(/[A-Za-zÀ-ú]/g) || []).length; if (letras >= 4 && letras / l.length > 0.55 && !pula.test(l)) { loja = l.replace(/[^A-Za-zÀ-ú0-9&'. -]/g, "").trim().slice(0, 40); break; } }
   if (loja) loja = loja.toLowerCase().replace(/(^|\s)\S/g, (c) => c.toUpperCase());
-  return { total, data, loja, subtotal, desconto };
+  const opcoes = [];
+  [total, subtotal != null ? Math.round((subtotal - desconto) * 100) / 100 : null].concat(candTotal, candPag, subtotal != null ? [subtotal] : []).forEach((v) => { if (v > 0 && !opcoes.some((o) => perto(o, v))) opcoes.push(v); });
+  return { total, data, loja, subtotal, desconto, opcoes: opcoes.slice(0, 5) };
 }
 
 function escanearQR() {
@@ -333,9 +358,20 @@ async function comprime(file) {
 /* ---------- leitura de frase falada/escrita (sem IA) ---------- */
 const GUESS = [[/mercado ?livre|shopee|amazon|shein|magalu/, "Compras online"], [/ifood|ifd|99 ?food|rappi|delivery/, "Delivery"], [/mercad|super|emporio|empório|pietra|atacad|feira|hortifruti|carrefour|assa[ií]/, "Mercado"], [/pani|padar|caf[eé]|lanch|gourmet|sorvet|a[cç]a[ií]|doceria/, "Lanches e café"], [/mc ?donald|outback|pizz|restaur|burger|subway|jantar|almo[cç]|churrasc/, "Restaurantes"], [/uber|\b99\b|posto|gasolina|combust|estacion|ped[aá]gio/, "Uber e transporte"], [/drog|farm|rem[eé]dio|sa[uú]de|m[eé]dic|cl[ií]nica/, "Saúde"], [/\bpet\b|fauna|sploot|ra[cç][aã]o|veterin/, "Pet"], [/marisa|riachuelo|c&a|\bcea\b|renner|cosm|laser|roupa|sal[aã]o|cabel|boticario|botic[aá]rio/, "Roupas e beleza"]];
 const adivinha = (t) => GUESS.find(([r]) => r.test(t));
+// entende como o iPhone escreve valores falados: "15,90", "15.90", "15 90", "15 e 90", "15 reais e 90 centavos", "R$ 1.250"
+function valorFalado(txt) {
+  let t = " " + String(txt).toLowerCase().replace(/r\$\s*/g, " ").replace(/\s+/g, " ") + " ";
+  let m;
+  if ((m = t.match(/(\d+)\s*(?:reais|real|conto)?\s*(?:e|com)\s*(\d{1,2})\s*(?:centavos?)?(?!\d)/))) return +m[1] + +m[2].padEnd(2, "0") / 100;
+  if ((m = t.match(/(\d{1,3}(?:\.\d{3})+)(?:,(\d{1,2}))?(?!\d)/))) return +m[1].replace(/\./g, "") + (m[2] ? +m[2].padEnd(2, "0") / 100 : 0);
+  if ((m = t.match(/(\d+)[.,](\d{1,2})(?!\d)/))) return +m[1] + +m[2].padEnd(2, "0") / 100;
+  if ((m = t.match(/(\d+) (\d{2})(?!\d)(?!\s*(?:de\s+)?(?:jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez|vez|x|parcela))/))) return +m[1] + +m[2] / 100;
+  if ((m = t.match(/(\d+)(?:\s*(?:reais|real|conto))?/))) return +m[1];
+  return null;
+}
 function lerFrase(txt) {
   const t = " " + txt.toLowerCase() + " "; const o = {};
-  const m = t.match(/(\d{1,3}(?:\.\d{3})*(?:,\d{1,2})?|\d+(?:[.,]\d{1,2})?)\s*(?:reais|real|r\$)?/); if (m) o.valor = parseNum(m[1]);
+  { const v = valorFalado(t); if (v != null) o.valor = v; }
   const g = adivinha(t); if (g) o.categoria = g[1];
   if (/ita[uú]/.test(t)) o.pagamento = "Itaú crédito"; else if (/ef[ií]/.test(t)) o.pagamento = "Efí crédito"; else if (/cr[eé]dito|cart[aã]o/.test(t)) o.pagamento = "Itaú crédito"; else if (/\bpj\b|empresa|ag[eê]ncia/.test(t)) o.pagamento = "Nubank PJ"; else if (/dinheiro/.test(t)) o.pagamento = "Dinheiro"; else if (/d[eé]bito|pix|nubank/.test(t)) o.pagamento = "Nubank débito";
   if (/marido|esposa|parceir|nelson/.test(t)) o.quem = "Parceiro(a)"; else if (/\bcasa\b|n[oó]s dois|casal/.test(t)) o.quem = "Casa";
@@ -717,7 +753,7 @@ function lancar(existente) {
   abre('<div class="row"><h2>' + (ex ? "Editar lançamento" : "Novo lançamento") + '</h2><button class="linkbtn" id="xClose">Cancelar</button></div>' +
     '<div class="seg" role="group" aria-label="Tipo"><button data-tp="s" aria-pressed="' + (st.t !== "e") + '">Gasto</button><button data-tp="e" aria-pressed="' + (st.t === "e") + '">Entrada</button></div>' +
     (ex ? "" : '<div class="field">Fale ou escreva o gasto<div style="display:flex;gap:8px"><button class="mic" id="fMic" type="button" aria-label="Falar o gasto"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button><input id="fFala" placeholder="Ex.: 45 no mercado, no débito" autocomplete="off" enterkeyhint="done" style="flex:1;min-width:0"><button class="btn" id="fFalaOk" type="button" style="width:auto;height:48px;padding:0 14px;font-size:14px">Preencher</button></div><span class="note" id="falaStatus" style="color:var(--muted);font-weight:600">Toque no microfone e fale: "45 reais no mercado, no débito".</span></div>' +
-      '<div><div id="nfLabel"><label class="nfbtn" for="fFoto"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>Foto da nota</label></div><input id="fFoto" class="vh" type="file" accept="image/*"><div class="nfprev" id="nfPrev" hidden><img id="nfThumb" alt="Nota fiscal escolhida"><div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:4px"><b class="small">Nota anexada</b><span class="note" id="nfStatus" style="color:var(--muted)"></span></div><button class="linkbtn" type="button" id="nfTirar">Remover</button></div></div>') +
+      '<div><div id="nfLabel"><label class="nfbtn" for="fFoto"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>Foto da nota</label></div><input id="fFoto" class="vh" type="file" accept="image/*"><div class="nfprev" id="nfPrev" hidden><img id="nfThumb" alt="Nota fiscal escolhida"><div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:4px"><b class="small">Nota anexada</b><span class="note" id="nfStatus" style="color:var(--muted)"></span></div><button class="linkbtn" type="button" id="nfTirar">Remover</button></div><div class="chips" id="nfOpc" style="margin-top:8px"></div></div>') +
     '<label class="field amount">Valor<input id="fValor" inputmode="decimal" placeholder="R$ 0,00" autocomplete="off" value="' + (ex ? esc(String(ex.valor).replace(".", ",")) : "") + '"></label>' +
     '<label class="field">Onde<input id="fDesc" placeholder="Ex.: Padaria" autocomplete="off" maxlength="60" value="' + esc(ex ? ex.descricao || "" : "") + '"></label>' +
     '<div class="field" id="boxCat"' + (st.t === "e" ? " hidden" : "") + '>Categoria<div class="chips" role="group" aria-label="Categoria">' + chips(CATS, "cat", st.c) + '</div><span class="note" id="fInfo"></span></div>' +
@@ -785,7 +821,8 @@ function lancar(existente) {
         catch (e) { parar(); sMsg("Não consegui abrir o microfone. Use o microfone do teclado.", "var(--warn)"); }
       };
       $("#fFala", p).addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); fala(); } });
-      $("#nfTirar", p).onclick = () => { st.foto = null; st.nfce = null; st.itens = null; $("#nfPrev", p).hidden = true; $("#nfLabel", p).hidden = false; $("#fFoto", p).value = ""; };
+      $("#nfOpc", p).addEventListener("click", (e) => { const b = e.target.closest("[data-opv]"); if (!b) return; $("#fValor", p).value = (+b.dataset.opv).toFixed(2).replace(".", ","); p.querySelectorAll("[data-opv]").forEach((x) => x.setAttribute("aria-pressed", x === b)); info(); });
+      $("#nfTirar", p).onclick = () => { $("#nfOpc", p).innerHTML = ""; st.ocr = null; st.foto = null; st.nfce = null; st.itens = null; $("#nfPrev", p).hidden = true; $("#nfLabel", p).hidden = false; $("#fFoto", p).value = ""; };
       const mostra = (txt, ok) => { const s = $("#nfStatus", p); s.textContent = txt; s.style.color = ok ? "var(--primary-text)" : "var(--muted)"; $("#nfPrev", p).hidden = false; $("#nfLabel", p).hidden = true; };
       // nota com QR: busca na SEFAZ e salva sozinho
       const pelaSefaz = async (qr) => {
@@ -816,6 +853,9 @@ function lancar(existente) {
         try {
           const texto = await lerTextoDaFoto(f, (pr) => mostra("Lendo os valores da nota… " + Math.round(pr * 100) + "%"));
           const r = interpretaCupom(texto);
+          st.ocr = String(texto).slice(0, 6000);
+          const box = $("#nfOpc", p);
+          if (box) box.innerHTML = r.opcoes.length > 1 ? '<span class="xs muted" style="width:100%">Valor errado? Toque no certo:</span>' + r.opcoes.map((v) => '<button type="button" class="chip" data-opv="' + v + '">' + esc(brl.format(v)) + "</button>").join("") : "";
           if (r.total) {
             aplica({ valor: r.total, loja: r.loja, data: r.data, categoria: r.loja ? (adivinha(r.loja.toLowerCase()) || [])[1] : null });
             mostra("Li " + brl.format(r.total) + (r.loja ? " em " + r.loja : "") + (r.subtotal && r.desconto ? " (" + brl.format(r.subtotal) + " − desconto " + brl.format(r.desconto) + ")" : "") + ". Confira e toque em Salvar.", true);
@@ -834,6 +874,7 @@ function lancar(existente) {
       if (!ex) row.criado_por = api.uid();
       if (st.nfce) row.nfce_url = st.nfce;
       if (st.itens && st.itens.length) row.itens = st.itens;
+      if (st.ocr) row.ocr_texto = st.ocr;
       if (pendente) row._nfce = true;
       if (st.foto) { row.nota_path = E + "/" + id + ".jpg"; await fotos.put(id, st.foto); const pend = ls.get("juntos:fotosPend", []); pend.push({ id, path: row.nota_path }); ls.set("juntos:fotosPend", pend); }
       grava("lanc", row);

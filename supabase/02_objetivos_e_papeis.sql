@@ -44,3 +44,6 @@ alter table public.fin_espacos add column if not exists proj_inicial numeric not
 
 -- Itens da nota fiscal (já aplicado)
 alter table public.fin_lancamentos add column if not exists itens jsonb;
+
+-- Texto lido da foto da nota, para diagnóstico (já aplicado)
+alter table public.fin_lancamentos add column if not exists ocr_texto text check (ocr_texto is null or char_length(ocr_texto) <= 6000);
