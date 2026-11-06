@@ -705,8 +705,8 @@ function lancar(existente) {
   const chips = (arr, attr, val) => arr.map((x) => '<button type="button" class="chip" data-' + attr + '="' + esc(x) + '" aria-pressed="' + (val === x) + '">' + esc(x) + "</button>").join("");
   abre('<div class="row"><h2>' + (ex ? "Editar lançamento" : "Novo lançamento") + '</h2><button class="linkbtn" id="xClose">Cancelar</button></div>' +
     '<div class="seg" role="group" aria-label="Tipo"><button data-tp="s" aria-pressed="' + (st.t !== "e") + '">Gasto</button><button data-tp="e" aria-pressed="' + (st.t === "e") + '">Entrada</button></div>' +
-    (ex ? "" : '<div class="field">Fale ou escreva o gasto<div style="display:flex;gap:8px"><input id="fFala" placeholder="Ex.: 45 no mercado, no débito" autocomplete="off" enterkeyhint="done" style="flex:1;min-width:0"><button class="btn" id="fFalaOk" type="button" style="width:auto;height:48px;padding:0 16px;font-size:14px">Preencher</button></div><span class="note" id="falaStatus" style="color:var(--muted);font-weight:600">Toque no campo e use o microfone do teclado.</span></div>' +
-      '<div><div class="grid2" id="nfLabel"><button type="button" class="nfbtn" id="nfScan"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3"/><path d="M8 8h3v3H8zM13 13h3v3h-3zM13 8h3M8 16h3"/></svg>Escanear QR</button><label class="nfbtn" for="fFoto"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>Foto da nota</label></div><input id="fFoto" class="vh" type="file" accept="image/*"><div class="nfprev" id="nfPrev" hidden><img id="nfThumb" alt="Nota fiscal escolhida"><div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:4px"><b class="small">Nota anexada</b><span class="note" id="nfStatus" style="color:var(--muted)"></span></div><button class="linkbtn" type="button" id="nfTirar">Remover</button></div></div>') +
+    (ex ? "" : '<div class="field">Fale ou escreva o gasto<div style="display:flex;gap:8px"><button class="mic" id="fMic" type="button" aria-label="Falar o gasto"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button><input id="fFala" placeholder="Ex.: 45 no mercado, no débito" autocomplete="off" enterkeyhint="done" style="flex:1;min-width:0"><button class="btn" id="fFalaOk" type="button" style="width:auto;height:48px;padding:0 14px;font-size:14px">Preencher</button></div><span class="note" id="falaStatus" style="color:var(--muted);font-weight:600">Toque no microfone e fale: "45 reais no mercado, no débito".</span></div>' +
+      '<div><div id="nfLabel"><label class="nfbtn" for="fFoto"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>Foto da nota</label></div><input id="fFoto" class="vh" type="file" accept="image/*"><div class="nfprev" id="nfPrev" hidden><img id="nfThumb" alt="Nota fiscal escolhida"><div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:4px"><b class="small">Nota anexada</b><span class="note" id="nfStatus" style="color:var(--muted)"></span></div><button class="linkbtn" type="button" id="nfTirar">Remover</button></div></div>') +
     '<label class="field amount">Valor<input id="fValor" inputmode="decimal" placeholder="R$ 0,00" autocomplete="off" value="' + (ex ? esc(String(ex.valor).replace(".", ",")) : "") + '"></label>' +
     '<label class="field">Onde<input id="fDesc" placeholder="Ex.: Padaria" autocomplete="off" maxlength="60" value="' + esc(ex ? ex.descricao || "" : "") + '"></label>' +
     '<div class="field" id="boxCat"' + (st.t === "e" ? " hidden" : "") + '>Categoria<div class="chips" role="group" aria-label="Categoria">' + chips(CATS, "cat", st.c) + '</div><span class="note" id="fInfo"></span></div>' +
@@ -748,6 +748,22 @@ function lancar(existente) {
     if (!ex) {
       const fala = () => { const tx = $("#fFala", p).value.trim(), s = $("#falaStatus", p); if (!tx) { s.textContent = "Diga algo como: 32 reais na padaria ontem."; $("#fFala", p).focus(); return; } aplica(lerFrase(tx)); s.textContent = "Preenchido. Confira e salve."; s.style.color = "var(--primary-text)"; };
       $("#fFalaOk", p).onclick = fala;
+      const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+      let rec = null;
+      const micBtn = $("#fMic", p), sMsg = (t, cor) => { const s = $("#falaStatus", p); s.textContent = t; s.style.color = cor || "var(--muted)"; };
+      const parar = () => { micBtn.classList.remove("on"); micBtn.setAttribute("aria-label", "Falar o gasto"); rec = null; };
+      micBtn.onclick = () => {
+        if (rec) { try { rec.stop(); } catch (e) {} return; }
+        if (!SR) { sMsg("Este celular não liberou o microfone no app. Toque no campo e use o microfone do teclado.", "var(--warn)"); $("#fFala", p).focus(); return; }
+        if (!navigator.onLine) { sMsg("Para falar, o celular precisa de internet. Escreva o gasto no campo.", "var(--warn)"); return; }
+        rec = new SR(); rec.lang = "pt-BR"; rec.interimResults = true; rec.continuous = false; rec.maxAlternatives = 1;
+        let final = "";
+        rec.onresult = (ev) => { let parcial = ""; for (let i = ev.resultIndex; i < ev.results.length; i++) { const t = ev.results[i][0].transcript; if (ev.results[i].isFinal) final += t; else parcial += t; } $("#fFala", p).value = (final + parcial).trim(); };
+        rec.onerror = (ev) => { const c = ev.error; sMsg(c === "not-allowed" || c === "service-not-allowed" ? "O microfone foi bloqueado. Libere em Ajustes > Safari > Microfone, ou use o microfone do teclado." : c === "no-speech" ? "Não ouvi nada. Toque no microfone e fale de novo." : "Não consegui ouvir. Tente de novo ou escreva no campo.", "var(--warn)"); parar(); };
+        rec.onend = () => { const tinha = !!rec; parar(); if (tinha && $("#fFala", p).value.trim()) fala(); };
+        try { rec.start(); micBtn.classList.add("on"); micBtn.setAttribute("aria-label", "Parar de ouvir"); sMsg("Ouvindo… fale o valor, o lugar e como pagou.", "var(--primary-text)"); }
+        catch (e) { parar(); sMsg("Não consegui abrir o microfone. Use o microfone do teclado.", "var(--warn)"); }
+      };
       $("#fFala", p).addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); fala(); } });
       $("#nfTirar", p).onclick = () => { st.foto = null; st.nfce = null; st.itens = null; $("#nfPrev", p).hidden = true; $("#nfLabel", p).hidden = false; $("#fFoto", p).value = ""; };
       const mostra = (txt, ok) => { const s = $("#nfStatus", p); s.textContent = txt; s.style.color = ok ? "var(--primary-text)" : "var(--muted)"; $("#nfPrev", p).hidden = false; $("#nfLabel", p).hidden = true; };
@@ -770,19 +786,12 @@ function lancar(existente) {
         mostra("A SEFAZ não respondeu. Salve: o app tenta de novo depois.");
         return true;
       };
-      $("#nfScan", p).onclick = async () => {
-        const qr = await escanearQR(); if (!qr) return;
-        if (!(await pelaSefaz(qr))) { mostra("Esse QR Code não é de nota fiscal."); }
-      };
       $("#fFoto", p).addEventListener("change", async (e) => {
         const f = e.target.files && e.target.files[0]; if (!f) return;
         mostra("Preparando a foto…");
         st.foto = await comprime(f);
         try { $("#nfThumb", p).src = URL.createObjectURL(st.foto); } catch (err) {}
-        mostra("Procurando o QR Code…");
-        let qr = null; try { qr = await achaQR(f); } catch (err) { qr = null; }
-        if (qr && (await pelaSefaz(qr))) return;
-        // sem QR: lê o texto da foto
+        // lê o texto da foto no próprio celular
         mostra("Lendo os valores da nota…");
         try {
           const texto = await lerTextoDaFoto(f, (pr) => mostra("Lendo os valores da nota… " + Math.round(pr * 100) + "%"));
