@@ -369,6 +369,7 @@ function abre(html, montar) {
   montar && montar($("#panel"));
 }
 function fecha() {
+  $("#panel").dispatchEvent(new Event("juntos:fechar"));
   $("#sheet").hidden = true; $("#panel").innerHTML = "";
   document.body.classList.remove("travado"); document.body.style.top = ""; window.scrollTo(0, rolagemAntes);
   ultimoFoco && ultimoFoco.focus && ultimoFoco.focus({ preventScroll: true });
@@ -762,16 +763,25 @@ function lancar(existente) {
       let rec = null;
       const micBtn = $("#fMic", p), sMsg = (t, cor) => { const s = $("#falaStatus", p); s.textContent = t; s.style.color = cor || "var(--muted)"; };
       const parar = () => { micBtn.classList.remove("on"); micBtn.setAttribute("aria-label", "Falar o gasto"); rec = null; };
+      p.addEventListener("juntos:fechar", () => { if (rec) { const r = rec; rec = null; try { r.abort(); } catch (e) {} } });
+      // toque 1: começa a ouvir (fica vermelho). Toque 2: para e envia o que foi dito.
+      let base = "";
+      const enviar = () => { const tx = $("#fFala", p).value.trim(); if (tx) fala(); else sMsg("Não ouvi nada. Toque no microfone e fale de novo.", "var(--warn)"); };
+      const comecar = () => {
+        const este = new SR(); este.lang = "pt-BR"; este.interimResults = true; este.continuous = true; este.maxAlternatives = 1;
+        base = $("#fFala", p).value.trim();
+        este.onresult = (ev) => { if (rec !== este) return; let t = ""; for (let i = 0; i < ev.results.length; i++) t += ev.results[i][0].transcript; $("#fFala", p).value = (base ? base + " " : "") + t.trim(); };
+        este.onerror = (ev) => { if (rec !== este) return; const c = ev.error; if (c === "no-speech" || c === "aborted") return; sMsg(c === "not-allowed" || c === "service-not-allowed" ? "O microfone foi bloqueado. Libere em Ajustes > Safari > Microfone, ou use o microfone do teclado." : "Não consegui ouvir. Tente de novo ou escreva no campo.", "var(--warn)"); parar(); };
+        // o iPhone às vezes para sozinho no silêncio: continua ouvindo até a pessoa tocar de novo
+        este.onend = () => { if (rec !== este) return; try { comecar(); } catch (e) { parar(); enviar(); } };
+        rec = este; este.start();
+      };
       micBtn.onclick = () => {
-        if (rec) { try { rec.stop(); } catch (e) {} return; }
+        if (rec) { const r = rec; parar(); try { r.stop(); } catch (e) {} setTimeout(() => { try { r.abort(); } catch (e) {} }, 700); enviar(); return; }
         if (!SR) { sMsg("Este celular não liberou o microfone no app. Toque no campo e use o microfone do teclado.", "var(--warn)"); $("#fFala", p).focus(); return; }
         if (!navigator.onLine) { sMsg("Para falar, o celular precisa de internet. Escreva o gasto no campo.", "var(--warn)"); return; }
-        rec = new SR(); rec.lang = "pt-BR"; rec.interimResults = true; rec.continuous = false; rec.maxAlternatives = 1;
-        let final = "";
-        rec.onresult = (ev) => { let parcial = ""; for (let i = ev.resultIndex; i < ev.results.length; i++) { const t = ev.results[i][0].transcript; if (ev.results[i].isFinal) final += t; else parcial += t; } $("#fFala", p).value = (final + parcial).trim(); };
-        rec.onerror = (ev) => { const c = ev.error; sMsg(c === "not-allowed" || c === "service-not-allowed" ? "O microfone foi bloqueado. Libere em Ajustes > Safari > Microfone, ou use o microfone do teclado." : c === "no-speech" ? "Não ouvi nada. Toque no microfone e fale de novo." : "Não consegui ouvir. Tente de novo ou escreva no campo.", "var(--warn)"); parar(); };
-        rec.onend = () => { const tinha = !!rec; parar(); if (tinha && $("#fFala", p).value.trim()) fala(); };
-        try { rec.start(); micBtn.classList.add("on"); micBtn.setAttribute("aria-label", "Parar de ouvir"); sMsg("Ouvindo… fale o valor, o lugar e como pagou.", "var(--primary-text)"); }
+        $("#fFala", p).value = "";
+        try { comecar(); micBtn.classList.add("on"); micBtn.setAttribute("aria-label", "Parar e enviar"); sMsg("Ouvindo… quando terminar, toque no microfone de novo para enviar.", "var(--primary-text)"); }
         catch (e) { parar(); sMsg("Não consegui abrir o microfone. Use o microfone do teclado.", "var(--warn)"); }
       };
       $("#fFala", p).addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); fala(); } });
