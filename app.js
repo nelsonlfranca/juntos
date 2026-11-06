@@ -307,34 +307,41 @@ function interpretaCupom(texto) {
   const acha = (re, evita) => { for (let i = 0; i < linhas.length; i++) if (re.test(linhas[i]) && !(evita && evita.test(linhas[i]))) { const v = ultimo(i); if (v != null) return v; } return null; };
   const ruim = /tribut|imposto|troco|acr[eé]sc|qtd|quantidade|itens|lei\s*12|aprox|ibpt|saldo|limite/i;
   const subtotal = acha(/sub\s*-?\s*tota/i, ruim);
-  const desconto = acha(/desc/i, /tribut|aprox/i) || 0;
+  // desconto: primeiro o "desconto no subtotal" (já soma os descontos dos itens); senão, linhas de desconto (nunca "descrição")
+  const desconto = acha(/desc(onto)?\.?\s*(no\s*|do\s*)?sub\s*-?\s*tota/i, /tribut|aprox/i) ?? acha(/desconto\s*(total|geral)?\s*(r\$)?\s*[\d-]*$/i, /tribut|aprox|descri|club|item/i) ?? 0;
   const candTotal = [];
-  [/valor\s*(a\s*)?pag(ar|o)/i, /total\s*a\s*pagar/i, /valor\s*total/i, /vl\.?\s*total/i, /(^|\s)total(?!\s*de\s*itens)/i].forEach((re) => linhas.forEach((l, i) => { if (re.test(l) && !ruim.test(l) && !/sub\s*-?\s*tota|desc/i.test(l)) { const v = ultimo(i); if (v != null) candTotal.push(v); } }));
+  [/valor\s*(a\s*)?pag(ar|o)/i, /total\s*a\s*pagar/i, /valor\s*total/i, /vl\.?\s*total/i, /(^|\s)total(?!\s*de\s*itens)/i].forEach((re) => linhas.forEach((l, i) => { if (re.test(l) && !ruim.test(l) && !/sub\s*-?\s*tota|desc|unit|qtde/i.test(l)) { const v = ultimo(i); if (v != null) candTotal.push(v); } }));
   const candPag = []; linhas.forEach((l, i) => { if (/d[eé]bito|cr[eé]dito|dinheiro|\bpix\b|cart[aã]o|alimenta|refei/i.test(l) && !ruim.test(l)) { const v = ultimo(i); if (v != null) candPag.push(v); } });
   const perto = (a, b) => Math.abs(a - b) < 0.015;
   let total = null;
-  // 1. confere com subtotal − desconto (o jeito mais seguro)
-  if (subtotal != null) {
-    const esperado = Math.round((subtotal - desconto) * 100) / 100;
-    total = candTotal.concat(candPag).find((v) => perto(v, esperado)) ?? (esperado > 0 ? esperado : null);
-  }
-  // 2. total que bate com o valor pago no cartão/pix/dinheiro
-  if (total == null) total = candTotal.find((v) => candPag.some((p) => perto(p, v))) ?? null;
+  const esperado = subtotal != null ? Math.round((subtotal - desconto) * 100) / 100 : null;
+  const refs = candTotal.concat(esperado > 0 ? [esperado] : []);
+  // 1. o valor pago (cartão/pix) que bate, mesmo com erro pequeno de leitura, com o total ou com subtotal − desconto
+  total = candPag.find((p) => refs.some((r) => Math.abs(p - r) <= 1)) ?? null;
+  // 2. total que bate exatamente com subtotal − desconto
+  if (total == null && esperado > 0) total = candTotal.find((v) => perto(v, esperado)) ?? null;
   // 3. o valor que mais se repete entre total e pagamento
   if (total == null && candTotal.concat(candPag).length) {
     const cont = {}; candTotal.concat(candPag).forEach((v) => (cont[v] = (cont[v] || 0) + 1));
     total = +Object.entries(cont).sort((a, b) => b[1] - a[1] || candTotal.indexOf(+a[0]) - candTotal.indexOf(+b[0]))[0][0];
   }
+  if (total == null && esperado > 0) total = esperado;
   // 4. sem rótulo nenhum: maior valor que não seja imposto/troco
   if (total == null) { let mx = 0; linhas.forEach((l) => { if (!ruim.test(l)) valores(l).forEach((n) => { if (n > mx) mx = n; }); }); if (mx > 0) total = mx; }
   let data = null;
   for (const l of linhas) { const m = l.match(/\b(\d{2})[\/.-](\d{2})[\/.-](\d{4}|\d{2})\b/); if (m) { const conserta = (t, max) => (+t > max && /^[689]/.test(t) ? +("0" + t[1]) : +t); const y = m[3].length === 2 ? "20" + m[3] : m[3], mo = conserta(m[2], 12), d = conserta(m[1], 31); if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31 && +y >= 2020) { data = y + "-" + pad(mo) + "-" + pad(d); break; } } }
   let loja = null;
+  // nome da empresa: o trecho com Ltda/S.A./Mercado etc. nas primeiras linhas (mesmo na linha do CNPJ)
+  const EMP = /\b(ltda|s\.?\s?\/?a\.?|eireli|supermercad\w*|mercad\w*|atacad\w*|padaria|panifica\w*|farm[aá]cia|drogaria|posto|restaurante|lanchonete|a[cç]ougue|hortifruti)\b/i;
+  for (const bruta of String(texto).split(/\r?\n/).slice(0, 8)) {
+    const parte = bruta.split(/\t|\s{3,}/).find((s) => EMP.test(s) && !/^\s*(av|rua|r\.|al\.|rod)\b/i.test(s));
+    if (parte) { const n = parte.replace(/cnpj\W*[\d./ -]+/i, "").replace(/\b(ltda|s\.?\s?\/?a|eireli|me|epp)\b\.?/gi, "").replace(/[^A-Za-zÀ-ú0-9&' -]/g, " ").replace(/\s+/g, " ").trim(); if (n.length >= 3) { loja = n.slice(0, 40); break; } }
+  }
   const pula = /cnpj|cpf|\bie\b|inscri|endere|rua |av\.|avenida|documento|auxiliar|nfc-?e|nota fiscal|consumidor|extrato|cupom|sat|fone|tel|cep|^\W*$/i;
-  for (const l of linhas.slice(0, 8)) { const letras = (l.match(/[A-Za-zÀ-ú]/g) || []).length; if (letras >= 4 && letras / l.length > 0.55 && !pula.test(l)) { loja = l.replace(/[^A-Za-zÀ-ú0-9&'. -]/g, "").trim().slice(0, 40); break; } }
+  if (!loja) for (const l of linhas.slice(0, 8)) { const letras = (l.match(/[A-Za-zÀ-ú]/g) || []).length; if (letras >= 4 && letras / l.length > 0.55 && !pula.test(l)) { loja = l.replace(/[^A-Za-zÀ-ú0-9&'. -]/g, "").trim().slice(0, 40); break; } }
   if (loja) loja = loja.toLowerCase().replace(/(^|\s)\S/g, (c) => c.toUpperCase());
   const opcoes = [];
-  [total, subtotal != null ? Math.round((subtotal - desconto) * 100) / 100 : null].concat(candTotal, candPag, subtotal != null ? [subtotal] : []).forEach((v) => { if (v > 0 && !opcoes.some((o) => perto(o, v))) opcoes.push(v); });
+  [total, esperado].concat(candTotal, candPag, subtotal != null ? [subtotal] : []).forEach((v) => { if (v > 0 && !opcoes.some((o) => perto(o, v))) opcoes.push(v); });
   return { total, data, loja, subtotal, desconto, opcoes: opcoes.slice(0, 5) };
 }
 
@@ -869,7 +876,7 @@ function lancar(existente) {
         catch (e) { parar(); sMsg("Não consegui abrir o microfone. Use o microfone do teclado.", "var(--warn)"); }
       };
       $("#fFala", p).addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); fala(); } });
-      $("#nfOpc", p).addEventListener("click", (e) => { const b = e.target.closest("[data-opv]"); if (!b) return; $("#fValor", p).value = (+b.dataset.opv).toFixed(2).replace(".", ","); p.querySelectorAll("[data-opv]").forEach((x) => x.setAttribute("aria-pressed", x === b)); info(); });
+      $("#nfOpc", p).addEventListener("click", (e) => { const b = e.target.closest("[data-opv]"); if (!b) return; $("#fValor", p).value = (+b.dataset.opv).toFixed(2).replace(".", ","); p.querySelectorAll("[data-opv]").forEach((x) => x.setAttribute("aria-pressed", x === b)); info(); const s = $("#nfStatus", p); if (s) s.textContent = "Valor trocado para " + brl.format(+b.dataset.opv) + ". Confira e toque em Salvar."; const fv = $("#fValor", p); fv.scrollIntoView({ behavior: "smooth", block: "center" }); fv.classList.add("pisca"); setTimeout(() => fv.classList.remove("pisca"), 1200); });
       $("#nfTirar", p).onclick = () => { $("#nfOpc", p).innerHTML = ""; st.ocr = null; st.foto = null; st.nfce = null; st.itens = null; $("#nfPrev", p).hidden = true; $("#nfLabel", p).hidden = false; $("#fFoto", p).value = ""; };
       const mostra = (txt, ok) => { const s = $("#nfStatus", p); s.textContent = txt; s.style.color = ok ? "var(--primary-text)" : "var(--muted)"; $("#nfPrev", p).hidden = false; $("#nfLabel", p).hidden = true; };
       // nota com QR: busca na SEFAZ e salva sozinho

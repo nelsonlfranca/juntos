@@ -170,3 +170,4 @@ body.travado{position:fixed;left:0;right:0;width:100%;overflow:hidden}
 .mic.on{background:var(--warn);border-color:var(--warn);color:#fff;animation:pulso 1.2s ease-in-out infinite}
 @keyframes pulso{0%,100%{box-shadow:0 0 0 0 rgba(194,82,45,.45)}50%{box-shadow:0 0 0 8px rgba(194,82,45,0)}}
 @media (prefers-reduced-motion:reduce){.mic.on{animation:none}}
+@keyframes pisca{0%,100%{box-shadow:none}30%{box-shadow:0 0 0 3px var(--primary)}}.pisca{animation:pisca 1.2s ease}
