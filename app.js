@@ -359,9 +359,33 @@ async function comprime(file) {
 const GUESS = [[/mercado ?livre|shopee|amazon|shein|magalu/, "Compras online"], [/ifood|ifd|99 ?food|rappi|delivery/, "Delivery"], [/mercad|super|emporio|empório|pietra|atacad|feira|hortifruti|carrefour|assa[ií]/, "Mercado"], [/pani|padar|caf[eé]|lanch|gourmet|sorvet|a[cç]a[ií]|doceria/, "Lanches e café"], [/mc ?donald|outback|pizz|restaur|burger|subway|jantar|almo[cç]|churrasc/, "Restaurantes"], [/uber|\b99\b|posto|gasolina|combust|estacion|ped[aá]gio/, "Uber e transporte"], [/drog|farm|rem[eé]dio|sa[uú]de|m[eé]dic|cl[ií]nica/, "Saúde"], [/\bpet\b|fauna|sploot|ra[cç][aã]o|veterin/, "Pet"], [/marisa|riachuelo|c&a|\bcea\b|renner|cosm|laser|roupa|sal[aã]o|cabel|boticario|botic[aá]rio/, "Roupas e beleza"]];
 const adivinha = (t) => GUESS.find(([r]) => r.test(t));
 // entende como o iPhone escreve valores falados: "15,90", "15.90", "15 90", "15 e 90", "15 reais e 90 centavos", "R$ 1.250"
+// "setenta e noventa e seis" -> "70 e 96" (caso o iPhone escreva por extenso)
+const NUM_PAL = { zero: 0, um: 1, uma: 1, dois: 2, duas: 2, "três": 3, tres: 3, quatro: 4, cinco: 5, seis: 6, sete: 7, oito: 8, nove: 9, dez: 10, onze: 11, doze: 12, treze: 13, quatorze: 14, catorze: 14, quinze: 15, dezesseis: 16, dezessete: 17, dezoito: 18, dezenove: 19, vinte: 20, trinta: 30, quarenta: 40, cinquenta: 50, "cinqüenta": 50, sessenta: 60, setenta: 70, oitenta: 80, noventa: 90, cem: 100, cento: 100, duzentos: 200, duzentas: 200, trezentos: 300, quatrocentos: 400, quinhentos: 500, seiscentos: 600, setecentos: 700, oitocentos: 800, novecentos: 900 };
+function palavrasParaNumeros(t) {
+  const tk = t.split(/\s+/), out = [];
+  let i = 0;
+  while (i < tk.length) {
+    if (NUM_PAL[tk[i]] == null && tk[i] !== "mil") { out.push(tk[i]); i++; continue; }
+    let total = 0, atual = 0, j = i, ultimo = null;
+    while (j < tk.length) {
+      const w = tk[j];
+      if (w === "mil") { total += (atual || 1) * 1000; atual = 0; ultimo = "mil"; j++; continue; }
+      const v = NUM_PAL[w];
+      if (v != null) { if (ultimo === "num" && v >= 10 && atual % 10 === 0 && atual % 100 !== 0 && v < 100) break; atual += v; ultimo = "num"; j++; continue; }
+      // "e" liga partes do mesmo número só quando o próximo é menor (setenta e sete); senão separa (setenta e noventa)
+      if (w === "e" && NUM_PAL[tk[j + 1]] != null && ultimo === "mil") { j++; continue; }
+      if (w === "e" && NUM_PAL[tk[j + 1]] != null && ultimo === "num") { const prox = NUM_PAL[tk[j + 1]]; const casa = atual >= 100 ? 100 : atual >= 20 ? 10 : 1; if (prox < casa || (atual >= 100 && prox < 100)) { j++; continue; } }
+      break;
+    }
+    out.push(String(total + atual)); i = j;
+  }
+  return out.join(" ");
+}
 function valorFalado(txt) {
-  let t = " " + String(txt).toLowerCase().replace(/r\$\s*/g, " ").replace(/\s+/g, " ") + " ";
+  let t = " " + String(txt).toLowerCase().replace(/r\$\s*/g, " ").replace(/\s+/g, " ").trim() + " ";
+  t = " " + palavrasParaNumeros(t.trim()) + " ";
   let m;
+  if ((m = t.match(/(\d+)\s*(?:reais|real|conto)\s+(\d{1,2})(?!\d)/))) return +m[1] + +m[2].padEnd(2, "0") / 100;
   if ((m = t.match(/(\d+)\s*(?:reais|real|conto)?\s*(?:e|com)\s*(\d{1,2})\s*(?:centavos?)?(?!\d)/))) return +m[1] + +m[2].padEnd(2, "0") / 100;
   if ((m = t.match(/(\d{1,3}(?:\.\d{3})+)(?:,(\d{1,2}))?(?!\d)/))) return +m[1].replace(/\./g, "") + (m[2] ? +m[2].padEnd(2, "0") / 100 : 0);
   if ((m = t.match(/(\d+)[.,](\d{1,2})(?!\d)/))) return +m[1] + +m[2].padEnd(2, "0") / 100;
