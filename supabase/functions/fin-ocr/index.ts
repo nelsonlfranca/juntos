@@ -35,7 +35,6 @@ Deno.serve(async (req) => {
     let r = await ler(img, chave, "2");
     if (!r.texto) r = await ler(img, chave, "1");
     if (!r.texto) return resp({ ok: false, erro: r.erro || "vazio" });
-    console.log("OCR_TEXTO\n" + r.texto.slice(0, 4000)); // diagnóstico temporário
     return resp({ ok: true, texto: r.texto.slice(0, 8000) });
   } catch (e) {
     return resp({ ok: false, erro: String(e).slice(0, 200) });
