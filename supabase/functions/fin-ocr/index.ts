@@ -17,6 +17,7 @@ async function ler(img: string, chave: string, motor: string) {
   f.append("detectOrientation", "true");
   const r = await fetch("https://api.ocr.space/parse/image", { method: "POST", headers: { apikey: chave }, body: f });
   const j = await r.json().catch(() => ({}));
+  console.log("OCR_RESP motor " + motor + " http " + r.status + " " + JSON.stringify({ e: j.IsErroredOnProcessing, m: j.ErrorMessage, d: j.ErrorDetails, x: j.OCRExitCode }).slice(0, 800));
   const texto = (j.ParsedResults || []).map((p: { ParsedText?: string }) => p.ParsedText || "").join("\n").trim();
   return { texto, erro: j.IsErroredOnProcessing ? String(j.ErrorMessage || "erro") : null };
 }

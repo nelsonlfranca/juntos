@@ -276,12 +276,12 @@ async function lerTextoDaFoto(fonte, aoProgredir) {
 // leitura na nuvem (OCR.space, gratuito) — foto reduzida para menos de 1 MB
 async function fotoParaNuvem(fonte) {
   const img = await createImageBitmap(fonte);
-  for (const [lado, q] of [[2400, 0.8], [2000, 0.72], [1700, 0.65], [1400, 0.6]]) {
+  for (const [lado, q] of [[2000, 0.75], [1800, 0.68], [1600, 0.62], [1400, 0.58], [1200, 0.55]]) {
     const sc = Math.min(1, lado / Math.max(img.width, img.height));
     const c = document.createElement("canvas"); c.width = Math.round(img.width * sc); c.height = Math.round(img.height * sc);
     const g = c.getContext("2d"); g.imageSmoothingQuality = "high"; g.drawImage(img, 0, 0, c.width, c.height);
     const url = c.toDataURL("image/jpeg", q);
-    if (url.length < 1300000) return url;
+    if (url.length < 1000000) return url; // OCR.space grátis: até 1 MB
   }
   return null;
 }
