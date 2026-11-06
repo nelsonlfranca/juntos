@@ -253,30 +253,40 @@ async function lerTextoDaFoto(fonte, aoProgredir) {
 // tira loja, total e data do texto do cupom
 function interpretaCupom(texto) {
   const linhas = String(texto).split(/\r?\n/).map((l) => l.replace(/\s+/g, " ").trim()).filter(Boolean);
-  const VAL = /(\d{1,3}(?:[.\s]\d{3})*[.,]\s?\d{2})(?!\d)/g;
-  const num = (t) => { t = t.replace(/\s/g, ""); const dec = t.slice(-3, -2); const int = t.slice(0, -3).replace(/[.,]/g, ""); return parseFloat(int + "." + t.slice(-2)); };
-  const ruim = /tribut|imposto|troco|desconto|acr[eé]sc|qtd|quantidade|itens|lei\s*12|aprox|ibpt|cr[eé]dito\s*de|saldo|limite/i;
-  const pref = [/valor\s*(a\s*)?pag(ar|o)/i, /total\s*a\s*pagar/i, /valor\s*total/i, /vl\.?\s*total/i, /total\s*(geral|r\$)?/i];
+  // valores no formato 1.234,56 ou 77,96 (aceita ponto no lugar da vírgula, que o leitor às vezes troca)
+  const VAL = /(?<![\d.,])(\d{1,3}(?:\.\d{3})+|\d{1,6})\s?[.,]\s?(\d{2})(?![\d])/g;
+  const valores = (l) => { const out = []; let m; VAL.lastIndex = 0; while ((m = VAL.exec(l))) { const n = parseFloat(m[1].replace(/\./g, "") + "." + m[2]); if (n > 0 && n < 100000) out.push(n); } return out; };
+  const ultimo = (i) => { const v = valores(linhas[i]); if (v.length) return v[v.length - 1]; const p = valores(linhas[i + 1] || ""); return p.length && !/[a-z]{4,}/i.test(linhas[i + 1] || "") ? p[p.length - 1] : null; };
+  const acha = (re, evita) => { for (let i = 0; i < linhas.length; i++) if (re.test(linhas[i]) && !(evita && evita.test(linhas[i]))) { const v = ultimo(i); if (v != null) return v; } return null; };
+  const ruim = /tribut|imposto|troco|acr[eé]sc|qtd|quantidade|itens|lei\s*12|aprox|ibpt|saldo|limite/i;
+  const subtotal = acha(/sub\s*-?\s*tota/i, ruim);
+  const desconto = acha(/desc/i, /tribut|aprox/i) || 0;
+  const candTotal = [];
+  [/valor\s*(a\s*)?pag(ar|o)/i, /total\s*a\s*pagar/i, /valor\s*total/i, /vl\.?\s*total/i, /(^|\s)total(?!\s*de\s*itens)/i].forEach((re) => linhas.forEach((l, i) => { if (re.test(l) && !ruim.test(l) && !/sub\s*-?\s*tota|desc/i.test(l)) { const v = ultimo(i); if (v != null) candTotal.push(v); } }));
+  const candPag = []; linhas.forEach((l, i) => { if (/d[eé]bito|cr[eé]dito|dinheiro|\bpix\b|cart[aã]o|alimenta|refei/i.test(l) && !ruim.test(l)) { const v = ultimo(i); if (v != null) candPag.push(v); } });
+  const perto = (a, b) => Math.abs(a - b) < 0.015;
   let total = null;
-  for (const re of pref) {
-    for (let i = 0; i < linhas.length && total == null; i++) {
-      if (!re.test(linhas[i]) || ruim.test(linhas[i])) continue;
-      const aqui = linhas[i].match(VAL) || ((linhas[i + 1] || "").match(VAL) || []);
-      if (aqui.length) total = num(aqui[aqui.length - 1]);
-    }
-    if (total != null) break;
+  // 1. confere com subtotal − desconto (o jeito mais seguro)
+  if (subtotal != null) {
+    const esperado = Math.round((subtotal - desconto) * 100) / 100;
+    total = candTotal.concat(candPag).find((v) => perto(v, esperado)) ?? (esperado > 0 ? esperado : null);
   }
-  if (total == null) {
-    let mx = 0; linhas.forEach((l) => { if (ruim.test(l)) return; (l.match(VAL) || []).forEach((v) => { const n = num(v); if (n > mx && n < 100000) mx = n; }); });
-    if (mx > 0) total = mx;
+  // 2. total que bate com o valor pago no cartão/pix/dinheiro
+  if (total == null) total = candTotal.find((v) => candPag.some((p) => perto(p, v))) ?? null;
+  // 3. o valor que mais se repete entre total e pagamento
+  if (total == null && candTotal.concat(candPag).length) {
+    const cont = {}; candTotal.concat(candPag).forEach((v) => (cont[v] = (cont[v] || 0) + 1));
+    total = +Object.entries(cont).sort((a, b) => b[1] - a[1] || candTotal.indexOf(+a[0]) - candTotal.indexOf(+b[0]))[0][0];
   }
+  // 4. sem rótulo nenhum: maior valor que não seja imposto/troco
+  if (total == null) { let mx = 0; linhas.forEach((l) => { if (!ruim.test(l)) valores(l).forEach((n) => { if (n > mx) mx = n; }); }); if (mx > 0) total = mx; }
   let data = null;
   for (const l of linhas) { const m = l.match(/\b(\d{2})[\/.-](\d{2})[\/.-](\d{4}|\d{2})\b/); if (m) { const y = m[3].length === 2 ? "20" + m[3] : m[3], mo = +m[2], d = +m[1]; if (mo >= 1 && mo <= 12 && d >= 1 && d <= 31 && +y >= 2020) { data = y + "-" + pad(mo) + "-" + pad(d); break; } } }
   let loja = null;
   const pula = /cnpj|cpf|\bie\b|inscri|endere|rua |av\.|avenida|documento|auxiliar|nfc-?e|nota fiscal|consumidor|extrato|cupom|sat|fone|tel|cep|^\W*$/i;
   for (const l of linhas.slice(0, 8)) { const letras = (l.match(/[A-Za-zÀ-ú]/g) || []).length; if (letras >= 4 && letras / l.length > 0.55 && !pula.test(l)) { loja = l.replace(/[^A-Za-zÀ-ú0-9&'. -]/g, "").trim().slice(0, 40); break; } }
   if (loja) loja = loja.toLowerCase().replace(/(^|\s)\S/g, (c) => c.toUpperCase());
-  return { total, data, loja };
+  return { total, data, loja, subtotal, desconto };
 }
 
 function escanearQR() {
@@ -798,7 +808,7 @@ function lancar(existente) {
           const r = interpretaCupom(texto);
           if (r.total) {
             aplica({ valor: r.total, loja: r.loja, data: r.data, categoria: r.loja ? (adivinha(r.loja.toLowerCase()) || [])[1] : null });
-            mostra("Li " + brl.format(r.total) + (r.loja ? " em " + r.loja : "") + ". Confira e toque em Salvar.", true);
+            mostra("Li " + brl.format(r.total) + (r.loja ? " em " + r.loja : "") + (r.subtotal && r.desconto ? " (" + brl.format(r.subtotal) + " − desconto " + brl.format(r.desconto) + ")" : "") + ". Confira e toque em Salvar.", true);
             $("#fSalvar", p).scrollIntoView({ behavior: "smooth", block: "center" });
           } else mostra("Não consegui ler o valor. Digite o valor abaixo.");
         } catch (err) { mostra(navigator.onLine ? "Não consegui ler a foto. Digite o valor abaixo." : "Sem internet para ler a foto agora. Digite o valor."); }
