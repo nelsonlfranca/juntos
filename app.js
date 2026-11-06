@@ -808,7 +808,7 @@ function lancar(existente) {
   abre('<div class="row"><h2>' + (ex ? "Editar lançamento" : "Novo lançamento") + '</h2><button class="linkbtn" id="xClose">Cancelar</button></div>' +
     '<div class="seg" role="group" aria-label="Tipo"><button data-tp="s" aria-pressed="' + (st.t !== "e") + '">Gasto</button><button data-tp="e" aria-pressed="' + (st.t === "e") + '">Entrada</button></div>' +
     (ex ? "" : '<div class="field">Fale ou escreva o gasto<div style="display:flex;gap:8px"><button class="mic" id="fMic" type="button" aria-label="Falar o gasto"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg></button><input id="fFala" placeholder="Ex.: 45 no mercado, no débito" autocomplete="off" enterkeyhint="done" style="flex:1;min-width:0"><button class="btn" id="fFalaOk" type="button" style="width:auto;height:48px;padding:0 14px;font-size:14px">Preencher</button></div><span class="note" id="falaStatus" style="color:var(--muted);font-weight:600">Toque no microfone e fale: "45 reais no mercado, no débito".</span></div>' +
-      '<div><div id="nfLabel"><label class="nfbtn" for="fFoto"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h3l2-3h6l2 3h3v11H4z"/><circle cx="12" cy="13" r="3.5"/></svg>Foto da nota</label></div><input id="fFoto" class="vh" type="file" accept="image/*"><div class="nfprev" id="nfPrev" hidden><img id="nfThumb" alt="Nota fiscal escolhida"><div style="flex:1;min-width:0;display:flex;flex-direction:column;gap:4px"><b class="small">Nota anexada</b><span class="note" id="nfStatus" style="color:var(--muted)"></span></div><button class="linkbtn" type="button" id="nfTirar">Remover</button></div><div class="chips" id="nfOpc" style="margin-top:8px"></div></div>') +
+      "") +
     '<label class="field amount">Valor<input id="fValor" inputmode="decimal" placeholder="R$ 0,00" autocomplete="off" value="' + (ex ? esc(String(ex.valor).replace(".", ",")) : "") + '"></label>' +
     '<label class="field">Onde<input id="fDesc" placeholder="Ex.: Padaria" autocomplete="off" maxlength="60" value="' + esc(ex ? ex.descricao || "" : "") + '"></label>' +
     '<div class="field" id="boxCat"' + (st.t === "e" ? " hidden" : "") + '>Categoria<div class="chips" role="group" aria-label="Categoria">' + chips(CATS, "cat", st.c) + '</div><span class="note" id="fInfo"></span></div>' +
@@ -876,52 +876,6 @@ function lancar(existente) {
         catch (e) { parar(); sMsg("Não consegui abrir o microfone. Use o microfone do teclado.", "var(--warn)"); }
       };
       $("#fFala", p).addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); fala(); } });
-      $("#nfOpc", p).addEventListener("click", (e) => { const b = e.target.closest("[data-opv]"); if (!b) return; $("#fValor", p).value = (+b.dataset.opv).toFixed(2).replace(".", ","); p.querySelectorAll("[data-opv]").forEach((x) => x.setAttribute("aria-pressed", x === b)); info(); const s = $("#nfStatus", p); if (s) s.textContent = "Valor trocado para " + brl.format(+b.dataset.opv) + ". Confira e toque em Salvar."; const fv = $("#fValor", p); fv.scrollIntoView({ behavior: "smooth", block: "center" }); fv.classList.add("pisca"); setTimeout(() => fv.classList.remove("pisca"), 1200); });
-      $("#nfTirar", p).onclick = () => { $("#nfOpc", p).innerHTML = ""; st.ocr = null; st.foto = null; st.nfce = null; st.itens = null; $("#nfPrev", p).hidden = true; $("#nfLabel", p).hidden = false; $("#fFoto", p).value = ""; };
-      const mostra = (txt, ok) => { const s = $("#nfStatus", p); s.textContent = txt; s.style.color = ok ? "var(--primary-text)" : "var(--muted)"; $("#nfPrev", p).hidden = false; $("#nfLabel", p).hidden = true; };
-      // nota com QR: busca na SEFAZ e salva sozinho
-      const pelaSefaz = async (qr) => {
-        if (!/^https?:\/\/[^/]*\.gov\.br/i.test(qr)) return false;
-        st.nfce = qr;
-        if (!navigator.onLine) { mostra("Sem internet: a nota será lida quando conectar. Salve agora.", true); return true; }
-        mostra("Lendo a nota na SEFAZ…");
-        try {
-          const n = await consultaNfce(qr);
-          if (n && n.ok && n.total > 0) {
-            st.itens = (n.itens || []).filter((i) => i.nome).slice(0, 60);
-            aplica({ valor: n.total, loja: n.loja, data: n.data, categoria: n.loja ? (adivinha(n.loja.toLowerCase()) || [])[1] : null });
-            mostra("Lido: " + brl.format(n.total) + (st.itens.length ? " · " + st.itens.length + " itens" : ""), true);
-            salvar(true);
-            return true;
-          }
-        } catch (err) {}
-        mostra("A SEFAZ não respondeu. Salve: o app tenta de novo depois.");
-        return true;
-      };
-      $("#fFoto", p).addEventListener("change", async (e) => {
-        const f = e.target.files && e.target.files[0]; if (!f) return;
-        mostra("Preparando a foto…");
-        st.foto = await comprime(f);
-        try { $("#nfThumb", p).src = URL.createObjectURL(st.foto); } catch (err) {}
-        // lê o texto da foto: primeiro na nuvem (mais preciso); sem internet, no próprio celular
-        mostra("Lendo os valores da nota…");
-        try {
-          let texto = navigator.onLine ? await lerTextoNaNuvem(f) : null;
-          let r = texto ? interpretaCupom(texto) : null;
-          if (!r || !r.total) {
-            texto = await lerTextoDaFoto(f, (pr) => mostra("Lendo no celular… " + Math.round(pr * 100) + "%"));
-            r = interpretaCupom(texto);
-          }
-          st.ocr = String(texto).slice(0, 6000);
-          const box = $("#nfOpc", p);
-          if (box) box.innerHTML = r.opcoes.length > 1 ? '<span class="xs muted" style="width:100%">Valor errado? Toque no certo:</span>' + r.opcoes.map((v) => '<button type="button" class="chip" data-opv="' + v + '">' + esc(brl.format(v)) + "</button>").join("") : "";
-          if (r.total) {
-            aplica({ valor: r.total, loja: r.loja, data: r.data, categoria: r.loja ? (adivinha(r.loja.toLowerCase()) || [])[1] : null });
-            mostra("Li " + brl.format(r.total) + (r.loja ? " em " + r.loja : "") + (r.subtotal && r.desconto ? " (" + brl.format(r.subtotal) + " − desconto " + brl.format(r.desconto) + ")" : "") + ". Confira e toque em Salvar.", true);
-            $("#fSalvar", p).scrollIntoView({ behavior: "smooth", block: "center" });
-          } else mostra("Não consegui ler o valor. Digite o valor abaixo.");
-        } catch (err) { mostra(navigator.onLine ? "Não consegui ler a foto. Digite o valor abaixo." : "Sem internet para ler a foto agora. Digite o valor."); }
-      });
     }
     const salvar = async (auto) => {
       let v = parseNum($("#fValor", p).value);

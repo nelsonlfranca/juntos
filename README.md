@@ -4,8 +4,7 @@ App de celular (PWA) para controlar o dinheiro da família: limite do mês, cont
 
 - **Funciona sem internet.** Tudo fica salvo no celular e sincroniza quando a conexão volta.
 - **Várias pessoas.** Cada pessoa tem login próprio. Um espaço (família) pode ter vários membros, entrando por código de convite.
-- **Nota fiscal.** Foto do cupom: o app lê o texto na nuvem (OCR.space, gratuito, função `fin-ocr`) e preenche valor, loja e data. Sem internet, lê no próprio celular (menos preciso).
-- **Lançar falando.** Use o microfone do teclado do celular no campo "Fale ou escreva o gasto".
+- **Lançar por texto ou voz.** Escreva ou fale "45 reais no mercado, no débito" e o app preenche. (A leitura por foto da nota foi removida em 6/nov/2026: errava valores.)
 - **Tema claro, escuro ou automático.**
 
 ## Como instalar no iPhone
@@ -20,7 +19,7 @@ App de celular (PWA) para controlar o dinheiro da família: limite do mês, cont
 | `sw.js` | Guarda o app no celular para abrir offline |
 | `manifest.webmanifest`, `icons/` | Instalação como app |
 | `supabase/juntos_banco.sql` | Tabelas `fin_*`, regras de acesso (RLS) e bucket `fin-notas` |
-| `supabase/functions/fin-ocr/` | Leitura da foto do cupom (precisa do segredo `OCRSPACE_KEY`) |
+| `supabase/functions/` | Funções antigas de leitura de nota (sem uso) |
 
 ## Segurança
 A chave em `config.js` é a chave **publicável** do Supabase e pode ficar pública. Cada tabela tem regras (RLS) que só deixam um usuário ver os dados dos espaços de que ele é membro.
