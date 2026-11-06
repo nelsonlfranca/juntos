@@ -4,7 +4,7 @@ App de celular (PWA) para controlar o dinheiro da família: limite do mês, cont
 
 - **Funciona sem internet.** Tudo fica salvo no celular e sincroniza quando a conexão volta.
 - **Várias pessoas.** Cada pessoa tem login próprio. Um espaço (família) pode ter vários membros, entrando por código de convite.
-- **Nota fiscal.** Foto do cupom: o app lê o QR Code da NFC-e e busca valor, loja e data na SEFAZ. Sem QR Code, a foto fica anexada e o valor é digitado.
+- **Nota fiscal.** Foto do cupom: o app lê o texto na nuvem (OCR.space, gratuito, função `fin-ocr`) e preenche valor, loja e data. Sem internet, lê no próprio celular (menos preciso).
 - **Lançar falando.** Use o microfone do teclado do celular no campo "Fale ou escreva o gasto".
 - **Tema claro, escuro ou automático.**
 
@@ -20,7 +20,7 @@ App de celular (PWA) para controlar o dinheiro da família: limite do mês, cont
 | `sw.js` | Guarda o app no celular para abrir offline |
 | `manifest.webmanifest`, `icons/` | Instalação como app |
 | `supabase/juntos_banco.sql` | Tabelas `fin_*`, regras de acesso (RLS) e bucket `fin-notas` |
-| `supabase/functions/fin-nfce/` | Função que lê a NFC-e pelo QR Code |
+| `supabase/functions/fin-ocr/` | Leitura da foto do cupom (precisa do segredo `OCRSPACE_KEY`) |
 
 ## Segurança
 A chave em `config.js` é a chave **publicável** do Supabase e pode ficar pública. Cada tabela tem regras (RLS) que só deixam um usuário ver os dados dos espaços de que ele é membro.

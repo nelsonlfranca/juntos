@@ -273,6 +273,30 @@ async function lerTextoDaFoto(fonte, aoProgredir) {
   return (r && r.data && r.data.text) || "";
 }
 
+// leitura na nuvem (OCR.space, gratuito) — foto reduzida para menos de 1 MB
+async function fotoParaNuvem(fonte) {
+  const img = await createImageBitmap(fonte);
+  for (const [lado, q] of [[2400, 0.8], [2000, 0.72], [1700, 0.65], [1400, 0.6]]) {
+    const sc = Math.min(1, lado / Math.max(img.width, img.height));
+    const c = document.createElement("canvas"); c.width = Math.round(img.width * sc); c.height = Math.round(img.height * sc);
+    const g = c.getContext("2d"); g.imageSmoothingQuality = "high"; g.drawImage(img, 0, 0, c.width, c.height);
+    const url = c.toDataURL("image/jpeg", q);
+    if (url.length < 1300000) return url;
+  }
+  return null;
+}
+async function lerTextoNaNuvem(fonte) {
+  const imagem = await fotoParaNuvem(fonte);
+  if (!imagem) return null;
+  const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 30000);
+  try {
+    const tk = await api.token();
+    const r = await fetch(URLB + "/functions/v1/fin-ocr", { method: "POST", signal: ctl.signal, headers: { apikey: KEY, Authorization: "Bearer " + tk, "Content-Type": "application/json" }, body: JSON.stringify({ imagem }) });
+    const j = await r.json().catch(() => ({}));
+    return j && j.ok && j.texto ? j.texto : null;
+  } catch (e) { return null; } finally { clearTimeout(t); }
+}
+
 // tira loja, total e data do texto do cupom
 function interpretaCupom(texto) {
   const linhas = String(texto).split(/\r?\n/).map((l) => l.replace(/\s+/g, " ").trim()).filter(Boolean);
@@ -872,11 +896,15 @@ function lancar(existente) {
         mostra("Preparando a foto…");
         st.foto = await comprime(f);
         try { $("#nfThumb", p).src = URL.createObjectURL(st.foto); } catch (err) {}
-        // lê o texto da foto no próprio celular
+        // lê o texto da foto: primeiro na nuvem (mais preciso); sem internet, no próprio celular
         mostra("Lendo os valores da nota…");
         try {
-          const texto = await lerTextoDaFoto(f, (pr) => mostra("Lendo os valores da nota… " + Math.round(pr * 100) + "%"));
-          const r = interpretaCupom(texto);
+          let texto = navigator.onLine ? await lerTextoNaNuvem(f) : null;
+          let r = texto ? interpretaCupom(texto) : null;
+          if (!r || !r.total) {
+            texto = await lerTextoDaFoto(f, (pr) => mostra("Lendo no celular… " + Math.round(pr * 100) + "%"));
+            r = interpretaCupom(texto);
+          }
           st.ocr = String(texto).slice(0, 6000);
           const box = $("#nfOpc", p);
           if (box) box.innerHTML = r.opcoes.length > 1 ? '<span class="xs muted" style="width:100%">Valor errado? Toque no certo:</span>' + r.opcoes.map((v) => '<button type="button" class="chip" data-opv="' + v + '">' + esc(brl.format(v)) + "</button>").join("") : "";
